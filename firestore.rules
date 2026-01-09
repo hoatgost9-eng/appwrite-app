@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // === SIMPLIFIED RULES - READS ONLY NEED AUTH ===
+    
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    // WRITES check user doc for role/permissions
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function isAdmin() {
+      return isAuth() && userData().role == 'admin';
+    }
+    
+    function isEditor() {
+      return isAuth() && userData().role == 'editor';
+    }
+    
+    function hasPerm(p) {
+      return isAuth() && userData().permissions != null && userData().permissions[p] == true;
+    }
+    
+    // Users - anyone authenticated can read (no circular dependency)
+    match /users/{userId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+    
+    // Projects
+    match /projects/{projectId} {
+      allow read: if isAuth();
+      allow create, update: if isAdmin() || isEditor();
+      allow delete: if isAdmin() || hasPerm('canDeleteProjects');
+    }
+    
+    // Elements
+    match /elements/{elementId} {
+      allow read: if isAuth();
+      allow create, update: if isAdmin() || isEditor() || hasPerm('canEditElements');
+      allow delete: if isAdmin() || hasPerm('canDeleteElements');
+    }
+    
+    // Delivery Notes
+    match /delivery_notes/{noteId} {
+      allow read: if isAuth();
+      allow create: if isAdmin() || isEditor() || hasPerm('canCreateDN');
+      allow update: if isAdmin() || isEditor() || hasPerm('canEditElements');
+      allow delete: if isAdmin() || hasPerm('canDeleteElements');
+    }
+    
+    // Recycle Bin
+    match /recycle/{recycleId} {
+      allow read: if isAuth();
+      allow write: if isAdmin() || isEditor();
+    }
+    
+    // Logs
+    match /logs/{logId} {
+      allow read, create: if isAuth();
+      allow update, delete: if isAdmin();
+    }
+    
+    // Invitations
+    match /invitations/{inviteId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

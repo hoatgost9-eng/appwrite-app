@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions - safely get user data without circular dependency
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function userRole() {
+      return getUserData().role;
+    }
+    
+    function isUserDisabled() {
+      return getUserData().disabled == true;
+    }
+    
+    function hasPermission(perm) {
+      return getUserData().permissions != null && getUserData().permissions[perm] == true;
+    }
+    
+    // Core permission checks
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && userRole() == 'admin' && !isUserDisabled();
+    }
+    
+    function isStaff() {
+      return isAuthenticated() && !isUserDisabled() && (userRole() == 'admin' || userRole() == 'editor');
+    }
+    
+    function canRead() {
+      return isAuthenticated() && !isUserDisabled();
+    }
+    
+    // Users collection - IMPORTANT: Allow reading own profile without checking disabled status
+    // to avoid circular dependency
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId || // Can read own profile
+        userRole() == 'admin' // Admins can read all profiles
+      );
+      allow write: if isAdmin();
+    }
+    
+    // Projects collection
+    match /projects/{projectId} {
+      allow read: if canRead();
+      allow create, update: if isStaff();
+      allow delete: if isAdmin() || hasPermission('canDeleteProjects');
+    }
+    
+    // Elements collection
+    match /elements/{elementId} {
+      allow read: if canRead();
+      allow create, update: if isStaff() || hasPermission('canEditElements');
+      allow delete: if isAdmin() || hasPermission('canDeleteElements');
+    }
+    
+    // Delivery notes collection
+    match /delivery_notes/{noteId} {
+      allow read: if canRead();
+      allow create: if isStaff() || hasPermission('canCreateDN');
+      allow update: if isStaff() || hasPermission('canEditElements');
+      allow delete: if isAdmin() || hasPermission('canDeleteElements');
+    }
+    
+    // Recycle bin collection
+    match /recycle/{recycleId} {
+      allow read: if canRead();
+      allow write: if isStaff();
+    }
+    
+    // Logs collection
+    match /logs/{logId} {
+      allow read, create: if canRead();
+      allow update, delete: if isAdmin();
+    }
+    
+    // Invitations collection
+    match /invitations/{inviteId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Basic auth check - no database reads needed
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Safe helper - gets user data (assumes user can read their own profile)
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Role checks
+    function isAdmin() {
+      return isAuthenticated() && getUserData().role == 'admin';
+    }
+    
+    function isEditor() {
+      return isAuthenticated() && getUserData().role == 'editor';
+    }
+    
+    function isStaff() {
+      return isAdmin() || isEditor();
+    }
+    
+    // Check if user is disabled (for non-profile reads)
+    function isDisabled() {
+      return getUserData().disabled == true;
+    }
+    
+    // Check custom permissions
+    function hasPerm(perm) {
+      let userData = getUserData();
+      return userData.permissions != null && userData.permissions[perm] == true;
+    }
+    
+    // Users collection - Simple, no circular dependency
+    match /users/{userId} {
+      // Anyone authenticated can read their own profile (needed for role checks)
+      // Admins can read all profiles
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isAdmin();
+    }
+    
+    // Projects collection
+    match /projects/{projectId} {
+      allow read: if isAuthenticated() && !isDisabled();
+      allow create, update: if isAuthenticated() && !isDisabled() && isStaff();
+      allow delete: if isAuthenticated() && !isDisabled() && (isAdmin() || hasPerm('canDeleteProjects'));
+    }
+    
+    // Elements collection
+    match /elements/{elementId} {
+      allow read: if isAuthenticated() && !isDisabled();
+      allow create, update: if isAuthenticated() && !isDisabled() && (isStaff() || hasPerm('canEditElements'));
+      allow delete: if isAuthenticated() && !isDisabled() && (isAdmin() || hasPerm('canDeleteElements'));
+    }
+    
+    // Delivery notes collection
+    match /delivery_notes/{noteId} {
+      allow read: if isAuthenticated() && !isDisabled();
+      allow create: if isAuthenticated() && !isDisabled() && (isStaff() || hasPerm('canCreateDN'));
+      allow update: if isAuthenticated() && !isDisabled() && (isStaff() || hasPerm('canEditElements'));
+      allow delete: if isAuthenticated() && !isDisabled() && (isAdmin() || hasPerm('canDeleteElements'));
+    }
+    
+    // Recycle bin collection
+    match /recycle/{recycleId} {
+      allow read: if isAuthenticated() && !isDisabled();
+      allow write: if isAuthenticated() && !isDisabled() && isStaff();
+    }
+    
+    // Logs collection
+    match /logs/{logId} {
+      allow read, create: if isAuthenticated() && !isDisabled();
+      allow update, delete: if isAuthenticated() && !isDisabled() && isAdmin();
+    }
+    
+    // Invitations collection
+    match /invitations/{inviteId} {
+      allow read, write: if isAuthenticated() && isAdmin();
+    }
+  }
+}

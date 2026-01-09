@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Delivery Note Print Preview</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; background: #fff; color: #222; }
+    .dn-container { max-width: 800px; margin: auto; border: 1px solid #ccc; border-radius: 8px; padding: 32px; background: #fff; }
+    h1 { font-size: 2em; margin-bottom: 0.2em; }
+    h2 { font-size: 1.2em; margin-top: 0; color: #555; }
+    table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f0f0f0; }
+    .print-btn { margin-bottom: 24px; }
+    
+    /* Hide browser-generated headers and footers when printing */
+    @media print { 
+      .print-btn { display: none; }
+      
+      /* Remove browser default headers/footers */
+      @page { 
+        margin: 10mm;
+        size: auto;
+      }
+      
+      /* Hide all default browser print elements */
+      body::before,
+      body::after {
+        content: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="dn-container">
+    <button class="print-btn" onclick="window.print()">Print</button>
+    <div id="dn-content"></div>
+  </div>
+  <script>
+    function formatDate(dateStr) {
+      if (!dateStr) return '-';
+      const d = new Date(dateStr);
+      if (isNaN(d)) return dateStr;
+      return d.toLocaleDateString();
+    }
+    function renderDN(dn) {
+      if (!dn) {
+        document.getElementById('dn-content').innerHTML = '<p>No data found.</p>';
+        return;
+      }
+      document.getElementById('dn-content').innerHTML = `
+        <h1>Delivery Note</h1>
+        <h2>DN Number: <b>${dn.dnNumber || '-'}</b></h2>
+        <div><b>Reference:</b> ${dn.refNo || '-'}</div>
+        <div><b>Project:</b> ${dn.projectName || dn.project || '-'}</div>
+        <div><b>Address:</b> ${dn.address || '-'}</div>
+        <div><b>Date:</b> ${formatDate(dn.date)}</div>
+        <div><b>Driver:</b> ${dn.driverName || '-'}</div>
+        <div><b>Vehicle No:</b> ${dn.vehicleNo || '-'}</div>
+        <div><b>Transport Co:</b> ${dn.transportCo || '-'}</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Element ID</th>
+              ${dn.showCluster ? '<th>Cluster</th>' : ''}
+              ${dn.showVilla ? '<th>Villa</th>' : ''}
+              <th>Type</th><th>Qty</th><th>Volume</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(dn.items||[]).map(item => `<tr><td>${item.elementId||'-'}</td>${dn.showCluster ? `<td>${item.cluster||'-'}</td>` : ''}${dn.showVilla ? `<td>${item.villa||'-'}</td>` : ''}<td>${item.type||'-'}</td><td>${item.qty||1}</td><td>${item.volume||'-'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    function renderDNs(dns) {
+      if (!dns || (Array.isArray(dns) && dns.length === 0)) {
+        document.getElementById('dn-content').innerHTML = '<p>No data found.</p>';
+        return;
+      }
+      if (!Array.isArray(dns)) dns = [dns];
+      document.getElementById('dn-content').innerHTML = dns.map((dn, idx) => `
+        <div style="page-break-after: always; margin-bottom: 40px;">
+          <h1>Delivery Note</h1>
+          <h2>DN Number: <b>${dn.dnNumber || '-'}</b></h2>
+          <div><b>Reference:</b> ${dn.refNo || '-'}</div>
+          <div><b>Project:</b> ${dn.projectName || dn.project || '-'}</div>
+          <div><b>Address:</b> ${dn.address || '-'}</div>
+          <div><b>Date:</b> ${formatDate(dn.date)}</div>
+          <div><b>Driver:</b> ${dn.driverName || '-'}</div>
+          <div><b>Vehicle No:</b> ${dn.vehicleNo || '-'}</div>
+          <div><b>Transport Co:</b> ${dn.transportCo || '-'}</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Element ID</th>
+                ${dn.showCluster ? '<th>Cluster</th>' : ''}
+                ${dn.showVilla ? '<th>Villa</th>' : ''}
+                <th>Type</th><th>Qty</th><th>Volume</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(dn.items||[]).map(item => `<tr><td>${item.elementId||'-'}</td>${dn.showCluster ? `<td>${item.cluster||'-'}</td>` : ''}${dn.showVilla ? `<td>${item.villa||'-'}</td>` : ''}<td>${item.type||'-'}</td><td>${item.qty||1}</td><td>${item.volume||'-'}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `).join('');
+    }
+    // Parse DN data from URL
+    const params = new URLSearchParams(window.location.search);
+    let dn = null;
+    try {
+      const dataParam = params.get('data');
+      if (dataParam) {
+        dn = JSON.parse(decodeURIComponent(dataParam));
+      } else if (params.get('mode') === 'bulk') {
+        dn = JSON.parse(sessionStorage.getItem('bulk_dn_print_data'));
+      } else if (params.get('mode') === 'single') {
+        dn = JSON.parse(sessionStorage.getItem('print_dn_data'));
+      }
+    } catch (e) {}
+    renderDNs(dn);
+  </script>
+</body>
+</html>

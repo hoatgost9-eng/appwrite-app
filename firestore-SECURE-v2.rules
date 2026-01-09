@@ -1,0 +1,156 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===== HELPER FUNCTIONS =====
+    
+    // Check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    // Get current user's data
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Check if user document exists
+    function userExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    
+    // Check if user is admin
+    function isAdmin() {
+      return isAuth() && userExists() && userData().role == 'admin';
+    }
+    
+    // Check if user is editor or admin
+    function isEditor() {
+      return isAuth() && userExists() && (userData().role == 'editor' || userData().role == 'admin');
+    }
+    
+    // Check if user account is not disabled
+    function isActive() {
+      return isAuth() && userExists() && userData().disabled != true;
+    }
+    
+    // Check if user has specific permission
+    function hasPermission(permission) {
+      return isAuth() && userExists() && 
+             (isAdmin() || isEditor() || userData().permissions[permission] == true);
+    }
+    
+    // Validate element data structure
+    function validElementData() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['elementId', 'projectNumber', 'type', 'volume']) &&
+             data.elementId is string &&
+             data.projectNumber is string &&
+             data.type is string &&
+             data.volume is number;
+    }
+    
+    // Validate project data structure
+    function validProjectData() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['projectId', 'name']) &&
+             data.projectId is string &&
+             data.name is string;
+    }
+    
+    // ===== USERS COLLECTION =====
+    match /users/{userId} {
+      // Users can read their own profile
+      allow read: if isAuth() && request.auth.uid == userId;
+      
+      // Admins can read all user profiles
+      allow read: if isAdmin();
+      
+      // Only admins can create, update, or delete user profiles
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // ===== PROJECTS COLLECTION =====
+    match /projects/{projectId} {
+      // All authenticated active users can read projects
+      allow read: if isAuth() && isActive();
+      
+      // Admins and editors can create projects
+      allow create: if isEditor() && isActive() && validProjectData();
+      
+      // Admins and editors can update projects
+      allow update: if isEditor() && isActive() && validProjectData();
+      
+      // Only admins can delete projects (or users with permission)
+      allow delete: if isActive() && (isAdmin() || hasPermission('canDeleteProjects'));
+    }
+    
+    // ===== ELEMENTS COLLECTION =====
+    match /elements/{elementId} {
+      // All authenticated active users can read elements
+      allow read: if isAuth() && isActive();
+      
+      // Admins and editors can create elements
+      allow create: if isEditor() && isActive() && validElementData();
+      
+      // Admins, editors, and users with edit permission can update
+      allow update: if isActive() && 
+                       (isEditor() || hasPermission('canEditElements')) &&
+                       validElementData();
+      
+      // Only admins or users with delete permission can delete
+      allow delete: if isActive() && (isAdmin() || hasPermission('canDeleteElements'));
+    }
+    
+    // ===== DELIVERY NOTES COLLECTION =====
+    match /delivery_notes/{noteId} {
+      // All authenticated active users can read delivery notes
+      allow read: if isAuth() && isActive();
+      
+      // Admins, editors, and users with permission can create delivery notes
+      allow create: if isActive() && (isEditor() || hasPermission('canCreateDN'));
+      
+      // Admins, editors, and users with permission can update delivery notes
+      allow update: if isActive() && (isEditor() || hasPermission('canEditDN'));
+      
+      // Only admins can delete delivery notes
+      allow delete: if isAdmin() && isActive();
+    }
+    
+    // ===== RECYCLE BIN =====
+    match /recycle/{recycleId} {
+      // Only admins can read recycled items
+      allow read: if isAdmin();
+      
+      // Admins and editors can write to recycle bin (when deleting items)
+      allow create: if isEditor() && isActive();
+      
+      // Only admins can restore (update) or permanently delete
+      allow update, delete: if isAdmin();
+    }
+    
+    // ===== LOGS COLLECTION =====
+    match /logs/{logId} {
+      // All authenticated users can read logs
+      allow read: if isAuth() && isActive();
+      
+      // System can create logs (anyone authenticated can log actions)
+      allow create: if isAuth() && isActive();
+      
+      // No one can update or delete logs (audit trail)
+      allow update, delete: if false;
+    }
+    
+    // ===== INVITATIONS COLLECTION (if you add email invites) =====
+    match /invitations/{inviteId} {
+      // Only admins can manage invitations
+      allow read, write: if isAdmin();
+    }
+    
+    // ===== DEFAULT DENY =====
+    // Deny all other access by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

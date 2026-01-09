@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "system-analysis-automation",
+    "production": "system-analysis-automation"
+  },
+  "targets": {},
+  "etags": {}
+}

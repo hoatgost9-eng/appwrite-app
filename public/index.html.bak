@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Naran Precast Production System</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        @media print { 
+            .no-print { display: none !important; } 
+            body { background: white; color: black; } 
+            @page { size: A4; margin: 5mm; } 
+            .print-container { padding: 0 !important; width: 100%; }
+        }
+        /* Force Input Visibility */
+        input, select, textarea { color: #0f172a !important; } 
+        /* mobile helpers */
+        .responsive-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .table-min-640 { min-width: 640px; }
+        .table-min-800 { min-width: 800px; }
+        @media (max-width: 640px) {
+            .login-card { padding: 1.25rem !important; }
+            .touch-btn { padding: .85rem 1rem !important; font-size: 1rem !important; }
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, usememo } = React;
+
+        // --- ICONS ---
+        const Icon = ({ name, size=18, className="" }) => {
+            const map = {
+                hammer: "fa-hammer", truck: "fa-truck", fileText: "fa-file-lines", 
+                folderPlus: "fa-folder-plus", plus: "fa-plus", upload: "fa-upload", 
+                search: "fa-search", pencil: "fa-pen", trash: "fa-trash", 
+                check: "fa-check", x: "fa-xmark", calendar: "fa-calendar-days", 
+                filter: "fa-filter", print: "fa-print", save: "fa-floppy-disk", 
+                spinner: "fa-spinner fa-spin", history: "fa-clock-rotate-left", 
+                clipboard: "fa-clipboard-list", building: "fa-building", 
+                fileExcel: "fa-file-excel", arrowRight: "fa-arrow-right", box: "fa-box-open",
+                paste: "fa-paste", shield: "fa-shield-halved", hashtag: "fa-hashtag",
+                bars: "fa-bars", list: "fa-list"
+            };
+            return <i className={`fa-solid ${map[name] || 'fa-circle'} ${className}`} style={{fontSize: size}}></i>;
+        };
+
+        // --- FIREBASE CONFIG ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCU39h8Ck-CVEb2ZUoEy-yebV0HtItvU8I",
+            authDomain: "precast-app-kesha.firebaseapp.com",
+            projectId: "precast-app-kesha",
+            storageBucket: "precast-app-kesha.firebasestorage.app",
+            messagingSenderId: "356069995832",
+            appId: "1:356069995832:web:ed53c3c49c285d8838bdcd"
+        };
+
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        // --- HELPERS ---
+        const getNext7Days = () => { const d=[]; for(let i=0;i<7;i++){ const x=new Date(); x.setDate(x.getDate()+i); d.push(x.toISOString().split('T')[0]); } return d; };
+        
+        const formatDate = (d) => {
+            if (!d) return '-';
+            const date = new Date(d);
+            if (isNaN(date.getTime())) return d; 
+            return date.toLocaleDateString('en-GB').replace(/\//g, '-');
+        };
+
+        const cleanDim = (v) => String(v||'').includes('202')?'-':v;
+        
+        const normalizeDate = (val) => {
+            if (!val) return '';
+            const date = new Date(val);
+            if (isNaN(date.getTime())) return val;
+            const year = date.getFullYear();
+            const month = String(date.getmonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const checkmetamatch = (el, text) => {
+            if (!text) return true;
+            const s = text.toLowerCase().trim();
+            const type = String(el.type || '').toLowerCase();
+            const cluster = String(el.cluster || '').toLowerCase();
+            const villa = String(el.villa || '').toLowerCase();
+            return type.includes(s) || cluster.includes(s) || villa.includes(s);
+        };
+
+        // ==================================================================================
+        // 3. LOGIN COmPONENT
+        // ==================================================================================
+        const Login = () => {
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleAuth = async (e) => {
+                e.preventDefault(); setError(''); setLoading(true);
+                const cleanEmail = email.trim().toLowerCase();
+                try { await auth.signInWithEmailAndPassword(cleanEmail, password); } 
+                catch (err) { console.error(err); setError("Incorrect Email or Password."); }
+                setLoading(false);
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md fade-in">
+                        <div className="text-center mb-8"><div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 text-blue-600 rounded-full mb-4"><Icon name="building" size={32} /></div><h1 className="text-lg sm:text-2xl md:text-3xl lg:text-4xl font-extrabold text-slate-800 leading-tight break-words">WELCOmE TO NARAN PRECAST CO.</h1><p className="text-slate-500 text-sm mt-1 font-bold uppercase tracking-wider">Authorized Personnel Only</p></div>
+                        {error && (<div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 font-medium border border-red-100 flex items-center gap-2"><Icon name="x" size={14}/> {error}</div>)}
+                        <form onSubmit={handleAuth} className="space-y-4"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full p-3 border-2 border-slate-200 rounded-lg text-slate-900 font-bold focus:border-blue-500 outline-none transition" placeholder="user@naran.com" required /></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full p-3 border-2 border-slate-200 rounded-lg text-slate-900 font-bold focus:border-blue-500 outline-none transition" placeholder="" required /></div><button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-bold shadow-lg transition flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">{loading ? <Icon name="spinner"/> : 'Secure Login'}</button></form>
+                    </div>
+                </div>
+            );
+        };
+
+        // ==================================================================================
+        // 4. ImPORTERS & LOGS
+        // ==================================================================================
+        const ImportWizard = ({ projects, onClose, onImportComplete, userRole }) => {
+            const canEditLocal = (userRole === 'admin' || userRole === 'editor');
+            const [step, setStep] = useState(1); const [file, setFile] = useState(null); const [workbook, setWorkbook] = useState(null); const [selectedSheet, setSelectedSheet] = useState(''); const [sheetData, setSheetData] = useState([]); const [headerRowIndex, setHeaderRowIndex] = useState(null); const [targetProj, setTargetProj] = useState(''); const [previewCount, setPreviewCount] = useState(0); const fileRef = useRef(null);
+            const handleFile = (e) => { const f = e.target.files[0]; if(f) { setFile(f); const r = new FileReader(); r.onload = (evt) => { const wb = XLSX.read(evt.target.result, {type:'binary'}); setWorkbook(wb); const likelySheet = wb.SheetNames.find(n => !['config', 'master'].includes(n.toLowerCase())) || wb.SheetNames[0]; setSelectedSheet(likelySheet); setStep(2); }; r.readAsBinaryString(f); } };
+            useEffect(() => { if(workbook && selectedSheet) { const ws = workbook.Sheets[selectedSheet]; const data = XLSX.utils.sheet_to_json(ws, {header: 1}); setSheetData(data.slice(0, 25)); setHeaderRowIndex(null); } }, [selectedSheet, workbook]);
+            const handleRowClick = (index) => { setHeaderRowIndex(index); const ws = workbook.Sheets[selectedSheet]; const data = XLSX.utils.sheet_to_json(ws, {range: index}); const valid = data.filter(row => { const keys = Object.keys(row); return keys.some(k => k.toUpperCase().includes('ID')); }); setPreviewCount(valid.length); };
+            const executeImport = async () => { if(!canEditLocal) { alert('Permission denied: read-only account.'); return; } if(!targetProj) { alert("Select a Project!"); return; } const proj = projects.find(p => p.projectId === targetProj); if(!proj) { alert("Project not found"); return; } const ws = workbook.Sheets[selectedSheet]; const data = XLSX.utils.sheet_to_json(ws, {range: headerRowIndex}); const batch = db.batch(); let count = 0; data.forEach(row => { const keys = Object.keys(row); const idKey = keys.find(k => k.toUpperCase().includes('ELEmENT') || k.toUpperCase() === 'ID'); const typeKey = keys.find(k => k.toUpperCase().includes('TYPE') || k.toUpperCase().includes('DESC')); const lKey = keys.find(k => k.toUpperCase() === 'LENGTH' || k.toUpperCase() === 'L'); const wKey = keys.find(k => k.toUpperCase() === 'WIDTH' || k.toUpperCase() === 'W'); const vKey = keys.find(k => k.toUpperCase().includes('VOL')); if(idKey && row[idKey]) { const eid = String(row[idKey]); const docId = `${targetProj}_${eid}`.replace(/\//g, "_"); batch.set(db.collection('elements').doc(docId), { elementId: eid, projectNumber: String(targetProj), projectName: proj.name, type: typeKey ? row[typeKey] : 'Unknown', length: lKey ? row[lKey] : '', widthHeight: wKey ? row[wKey] : '', volume: vKey ? row[vKey] : 0, status: 'Scheduled', castingDate: '', deliveryDate: '' }, {merge: true}); count++; } }); await batch.commit(); alert(`Success! Imported ${count} elements into ${proj.name}.`); onImportComplete("Imported File: " + count + " items"); };
+            return ( <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm"> <div className="bg-white w-full max-w-4xl h-[90vh] rounded-xl shadow-2xl flex flex-col overflow-hidden"> <div className="p-4 bg-slate-900 text-white flex justify-between items-center"><h3 className="font-bold text-lg"><Icon name="fileExcel" className="mr-2"/> Import Wizard</h3><button onClick={onClose}><Icon name="x"/></button></div> <div className="flex-1 p-6 overflow-y-auto"> {step === 1 && (<div className="h-full flex flex-col items-center justify-center space-y-4"><div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center"><Icon name="upload" size={32}/></div><h2 className="text-xl font-bold">Upload your Excel File</h2><button onClick={() => fileRef.current.click()} className="bg-emerald-600 text-white px-8 py-3 rounded-lg font-bold">Select File</button><input type="file" ref={fileRef} onChange={handleFile} className="hidden" accept=".xlsx" /></div>)} {step === 2 && ( <div className="space-y-6"> <div className="grid grid-cols-2 gap-6"> <div><label className="block text-xs font-bold text-slate-500 mb-1">1. Select Sheet containing Data</label><select className="w-full p-2 border border-blue-300 rounded font-bold" value={selectedSheet} onChange={e=>setSelectedSheet(e.target.value)}>{workbook.SheetNames.map(s => <option key={s} value={s}>{s}</option>)}</select></div> <div><label className="block text-xs font-bold text-slate-500 mb-1">2. Select Target Project</label><select className="w-full p-2 border border-blue-300 rounded font-bold" value={targetProj} onChange={e=>setTargetProj(e.target.value)}><option value="">-- Select Project --</option>{projects.map(p => <option key={p.projectId} value={p.projectId}>{p.name} (#{p.projectId})</option>)}</select></div> </div> <div><p className="block text-sm font-bold text-slate-700 mb-2 bg-yellow-50 p-2 border border-yellow-200 rounded">3. CLICK the Row number below that contains the HEADERS (e.g. "Element ID", "Type")</p><div className="border rounded overflow-x-auto max-h-96"><table className="w-full text-xs text-left border-collapse"><tbody>{sheetData.map((row, idx) => (<tr key={idx} onClick={() => handleRowClick(idx)} className={`cursor-pointer border-b ${headerRowIndex === idx ? 'bg-blue-600 text-white font-bold' : 'hover:bg-blue-50'}`}><td className="p-2 border-r bg-slate-100 text-slate-500 font-mono w-10 text-center">{idx + 1}</td>{row.map((cell, cIdx) => (<td key={cIdx} className="p-2 border-r truncate max-w-[100px]">{cell}</td>))}</tr>))}</tbody></table></div></div> </div> )} </div> <div className="p-4 border-t bg-slate-50 flex justify-between items-center">{headerRowIndex !== null ? (<div className="text-emerald-700 font-bold flex items-center gap-2"><Icon name="check"/> Ready to import {previewCount} items starting from Row {headerRowIndex + 1}</div>) : <div></div>}{step === 2 && (<button onClick={executeImport} disabled={headerRowIndex === null || !targetProj} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-700">Start Import <Icon name="arrowRight" className="ml-2"/></button>)}</div> </div> </div> );
+        };
+
+        /* --- COPY-PASTE ImPORTER (FIXED: UNDEFINED ERROR) --- */
+        const PasteImporter = ({ projects, onClose, onImportComplete, userRole }) => {
+            const canEditLocal = (userRole === 'admin' || userRole === 'editor');
+            const [text, setText] = useState('');
+            const [targetProj, setTargetProj] = useState('');
+            const [previewData, setPreviewData] = useState([]);
+            const [step, setStep] = useState(1);
+
+            const handleProcessText = () => {
+                if(!text.trim()) { alert("Please paste data first."); return; }
+                if(!targetProj) { alert("Please select a project first."); return; }
+                
+                const rows = text.trim().split('\n').map(row => row.split('\t'));
+                let headerIdx = 0;
+                const foundHeader = rows.some((row, idx) => {
+                    const str = row.join(' ').toUpperCase();
+                    if(str.includes('ELEmENT') || str.includes('ID') || str.includes('TYPE')) { headerIdx = idx; return true; }
+                    return false;
+                });
+
+                if (!foundHeader) { alert("Could not find headers. Please copy the header row."); return; }
+
+                const headers = rows[headerIdx].map(h => h.trim().toUpperCase());
+                const dataRows = rows.slice(headerIdx + 1);
+                const idTracker = {}; 
+
+                const mapped = dataRows.map(row => {
+                    const obj = {};
+                    headers.forEach((h, i) => {
+                        // FIX: Fallback to empty string if row[i] is undefined
+                        const val = row[i] ? String(row[i]).trim() : ''; 
+
+                        if(h.includes('ELEmENT') || h === 'ID') obj.elementId = val;
+                        else if(h.includes('TYPE') || h.includes('DESC')) obj.type = val;
+                        else if(h.includes('CLUSTER')) obj.cluster = val;
+                        else if(h.includes('VILLA')) obj.villa = val;
+                        else if(h.includes('VOLUmE') || h.includes('VOL')) obj.volume = val;
+                        else if(h.includes('LENGTH') || h === 'L') obj.length = val;
+                        else if(h.includes('WIDTH') || h.includes('HEIGHT')) obj.widthHeight = val;
+                        else if(h.includes('DWG')) obj.dwgDate = val;
+                        else if(h.includes('CAST')) obj.castingDate = val;
+                        else if(h.includes('DELIVER') || h.includes('SHIP')) obj.deliveryDate = val;
+                    });
+                    if((!obj.elementId || obj.elementId === '') && row[0]) obj.elementId = row[0];
+                    return obj;
+                }).filter(o => o.elementId);
+
+                const finalData = mapped.map(item => {
+                    const baseId = String(item.elementId).trim();
+                    if (idTracker[baseId]) { idTracker[baseId]++; item.elementId = `${baseId}-${idTracker[baseId]}`; } 
+                    else { idTracker[baseId] = 1; }
+                    const cDate = normalizeDate(item.castingDate);
+                    const dDate = normalizeDate(item.deliveryDate);
+                    const dwgDate = normalizeDate(item.dwgDate);
+                    let status = 'Scheduled';
+                    if (dDate) status = 'Shipped'; else if (cDate) status = 'Stockyard';
+                    return { ...item, castingDate: cDate, deliveryDate: dDate, dwgDate: dwgDate, status };
+                });
+
+                setPreviewData(finalData);
+                if(finalData.length > 0) setStep(2); else alert("No valid data found.");
+            };
+
+            const executeImport = async () => {
+                if (!canEditLocal) { alert('Permission denied: read-only account.'); return; }
+                const proj = projects.find(p => String(p.projectId) === String(targetProj));
+                if (!proj) { alert(`Error: Project not found.`); return; }
+                try {
+                    const batch = db.batch();
+                    let count = 0;
+                    previewData.forEach(item => {
+                        if (item.elementId) {
+                            const pid = String(targetProj);
+                            const safeId = String(item.elementId).replace(/\//g, "_");
+                            const docId = `${pid}_${safeId}`;
+                            // FIX: Strip undefined values using JSON serialization
+                            const safeItem = JSON.parse(JSON.stringify(item));
+                            batch.set(db.collection('elements').doc(docId), { ...safeItem, projectNumber: pid, projectName: proj.name }, {merge: true});
+                            count++;
+                        }
+                    });
+                    await batch.commit();
+                    alert(`? Success! Imported ${count} items into ${proj.name}.`);
+                    onImportComplete("Pasted Data: " + count + " items");
+                } catch(e) { console.error(e); alert("Database Error: " + e.message); }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white w-full max-w-5xl h-[90vh] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+                        <div className="p-4 bg-slate-900 text-white flex justify-between items-center flex-shrink-0">
+                            <h3 className="font-bold text-lg flex items-center"><Icon name="clipboard" className="mr-2"/> Import Wizard (Paste)</h3>
+                            <button onClick={onClose}><Icon name="x"/></button>
+                        </div>
+                        <div className="flex-1 p-6 overflow-y-auto">
+                            {step === 1 ? (
+                                <div className="flex flex-col space-y-4 h-full">
+                                    <div className="bg-blue-50 p-4 rounded border border-blue-200">
+                                        <label className="block text-blue-800 font-bold mb-2">1. Select Target Project</label>
+                                        <select className="w-full p-3 border-2 border-blue-300 rounded font-bold text-slate-800 bg-white" value={targetProj} onChange={e=>setTargetProj(e.target.value)}><option value="">-- Select Project --</option>{projects.map(p => <option key={p.projectId} value={p.projectId}>{p.name} (#{p.projectId})</option>)}</select>
+                                    </div>
+                                    <div className="flex-1 flex flex-col">
+                                        <label className="block text-slate-700 font-bold mb-2">2. Paste Excel Data (Include Headers)</label>
+                                        <textarea className="flex-1 w-full p-4 border-2 border-slate-400 rounded-lg text-slate-900 bg-white font-mono text-xs focus:ring-2 focus:ring-blue-500 shadow-inner h-64" placeholder="Copy columns from Excel (Element ID, Type, Length, Width, Volume, Cluster, Villa...) and paste here..." value={text} onChange={e => setText(e.target.value)}></textarea>
+                                    </div>
+                                    <button onClick={handleProcessText} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-lg font-bold shadow-lg text-lg flex items-center justify-center gap-2">Next Step <Icon name="arrowRight"/></button>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col h-full">
+                                    <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-xl text-slate-800">Preview Import</h3><span className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm font-bold">Found {previewData.length} items</span></div>
+                                    <div className="flex-1 border rounded overflow-auto bg-slate-50 mb-4">
+                                        <table className="w-full text-xs text-left border-collapse">
+                                            <thead className="bg-slate-200 sticky top-0 font-bold text-slate-900 shadow-sm"><tr><th className="p-2 border-b">ID</th><th className="p-2 border-b">Loc</th><th className="p-2 border-b">Type</th><th className="p-2 border-b">Dims</th><th className="p-2 border-b">Vol</th><th className="p-2 border-b">Cast</th><th className="p-2 border-b">Del</th><th className="p-2 border-b">Status</th></tr></thead>
+                                            <tbody className="text-slate-900 bg-white">{previewData.map((row, i) => (<tr key={i} className="border-b hover:bg-blue-50"><td className="p-2 font-bold">{row.elementId}</td><td className="p-2">{row.cluster} {row.villa}</td><td className="p-2">{row.type}</td><td className="p-2">{row.length} x {row.widthHeight}</td><td className="p-2">{row.volume}</td><td className="p-2 text-blue-600">{row.castingDate}</td><td className="p-2 text-emerald-600">{row.deliveryDate}</td><td className="p-2"><span className="bg-gray-100 px-2 py-0.5 rounded font-bold">{row.status}</span></td></tr>))}</tbody>
+                                        </table>
+                                    </div>
+                                    <div className="flex gap-4 flex-shrink-0"><button onClick={() => setStep(1)} className="bg-gray-200 hover:bg-gray-300 text-slate-800 px-6 py-3 rounded-lg font-bold transition">Back</button><button onClick={executeImport} className="bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-3 rounded-lg font-bold shadow-lg flex-1 transition">Confirm & Save</button></div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // ==================================================================================
+        // 5. mAIN VIEW COmPONENTS
+        // ==================================================================================
+
+        const DeliveryView = ({ elements, projects, onCreateDN, onHistory, userRole }) => {
+            const canEditLocal = (userRole === 'admin' || userRole === 'editor');
+            const [idFilter, setIdFilter] = useState('');
+            const [metaFilter, setmetaFilter] = useState('');
+            const [projFilter, setProjFilter] = useState('');
+            
+            const filtered = usememo(() => elements.filter(el => {
+                if(projFilter && String(el.projectNumber) !== String(projFilter)) return false;
+                if (idFilter && !String(el.elementId || '').toLowerCase().includes(idFilter.toLowerCase())) return false;
+                if(metaFilter && !checkmetamatch(el, metaFilter)) return false;
+                return true; 
+            }), [elements, projFilter, idFilter, metaFilter]);
+
+            return (
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col fade-in">
+                    <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                        <div className="flex gap-3 items-center">
+                            <select onChange={e=>setProjFilter(e.target.value)} className="p-2 border rounded text-sm bg-white text-slate-900 font-bold"><option value="">All Projects</option>{projects.map(p=><option key={p.id} value={p.projectId}>{p.name}</option>)}</select>
+                            {/* DUAL SEARCH */}
+                            <div className="relative"><Icon name="hashtag" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input placeholder="Search ID..." onChange={e=>setIdFilter(e.target.value)} className="pl-9 p-2 border rounded text-sm w-32 bg-white text-slate-900 font-bold"/></div>
+                            <div className="relative"><Icon name="search" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input placeholder="Villa, Cluster, Type..." onChange={e=>setmetaFilter(e.target.value)} className="pl-9 p-2 border rounded text-sm w-48 bg-white text-slate-900 font-bold"/></div>
+                        </div>
+                        <div className="flex gap-2"><button onClick={onHistory} className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded text-sm font-bold hover:bg-slate-50 flex items-center gap-2"><Icon name="history"/> History</button><button onClick={onCreateDN} disabled={!canEditLocal} className="disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold hover:bg-slate-900 flex items-center gap-2"><Icon name="clipboard"/> Create Delivery Note</button></div>
+                    </div>
+                <div className="flex-1 overflow-x-auto overflow-y-auto">
+                        <div className="responsive-table">
+                            <table className="w-full table-min-640 text-sm text-left text-slate-800">
+                            <thead className="bg-slate-100 text-slate-600 font-bold sticky top-0"><tr><th className="p-3">ID</th><th className="p-3">Project</th><th className="p-3 text-center">Cast Date</th><th className="p-3 text-center">Delivered</th><th className="p-3 text-center">Action</th></tr></thead>
+                                <tbody className="divide-y divide-slate-100">{filtered.slice(0,100).map(el => (<tr key={el.id} className="hover:bg-slate-50"><td className="p-3 font-bold">{el.elementId}</td><td className="p-3 text-xs">{el.projectName}</td><td className="p-3 text-center text-emerald-700 font-mono text-xs">{formatDate(el.castingDate)}</td><td className="p-3 text-center font-mono text-xs">{el.deliveryDate ? formatDate(el.deliveryDate) : '-'}</td><td className="p-3 text-center">{el.status === 'Stockyard' && <span className="text-blue-600 text-xs font-bold">Ready</span>}{el.status === 'Shipped' && <span className="text-gray-400 text-xs">Shipped</span>}</td></tr>))}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ProductionControlView = ({ elements, projects, onUpdate, onDelete, userRole }) => {
+            const canEditLocal = (userRole === 'admin' || userRole === 'editor');
+            const isAdminLocal = (userRole === 'admin');
+            const [idFilter, setIdFilter] = useState(''); const [metaFilter, setmetaFilter] = useState(''); const [projFilter, setProjFilter] = useState('');
+            const [tab, setTab] = useState('casting'); const [actionmodal, setActionmodal] = useState(null); const [actionDate, setActionDate] = useState(new Date().toISOString().split('T')[0]);
+            const [editingEl, setEditingEl] = useState(null);
+            // Pagination
+            const [currentPage, setCurrentPage] = useState(1); const itemsPerPage = 100;
+            useEffect(() => setCurrentPage(1), [idFilter, metaFilter, projFilter, tab]);
+
+            const filtered = usememo(() => elements.filter(el => {
+                if (projFilter && String(el.projectNumber) !== String(projFilter)) return false;
+                if (idFilter && !String(el.elementId || '').toLowerCase().includes(idFilter.toLowerCase())) return false;
+                if (metaFilter && !checkmetamatch(el, metaFilter)) return false;
+                if (tab === 'casting') return !el.castingDate;
+                if (tab === 'delivery') return el.castingDate && !el.deliveryDate;
+                return true;
+            }), [elements, projFilter, idFilter, metaFilter, tab]);
+
+            const indexOfLastItem = currentPage * itemsPerPage; const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+            const currentItems = filtered.slice(indexOfFirstItem, indexOfLastItem); const totalPages = math.ceil(filtered.length / itemsPerPage);
+            const initiateAction = (id, type) => { setActionmodal({ id, type }); setActionDate(new Date().toISOString().split('T')[0]); };
+            const confirmAction = () => { const { id, type } = actionmodal; if (type === 'delete') onDelete(id); else if (type === 'cast') onUpdate(id, { castingDate: actionDate, status: 'Stockyard' }, "Casting Updated"); else if (type === 'ship') onUpdate(id, { deliveryDate: actionDate, status: 'Shipped' }, "Delivery Updated"); setActionmodal(null); };
+            
+            // Excel Export
+            const handleExportExcel = () => {
+                if(filtered.length === 0) { alert("No data to export."); return; }
+                const exportData = filtered.map(e => ({ "Element ID": e.elementId, "Project": e.projectName, "Cluster": e.cluster || '', "Villa": e.villa || '', "Type": e.type, "Length": e.length, "Width/Height": e.widthHeight, "Volume": e.volume, "Drawing Date": e.dwgDate || '', "Casting Date": e.castingDate || '', "Delivery Date": e.deliveryDate || '', "Status": e.status }));
+                const ws = XLSX.utils.json_to_sheet(exportData);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Production_Data");
+                XLSX.writeFile(wb, `Production_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+            };
+
+            const handleSaveEdit = (e) => { 
+                e.preventDefault(); const fd = new FormData(e.target); 
+                const cDate = fd.get('castingDate');
+                const dDate = fd.get('deliveryDate');
+                const dwgDate = fd.get('dwgDate');
+                let newStatus = 'Scheduled';
+                if (dDate) newStatus = 'Shipped'; else if (cDate) newStatus = 'Stockyard';
+                onUpdate(editingEl.id, { type: fd.get('type'), length: fd.get('length'), widthHeight: fd.get('widthHeight'), volume: fd.get('volume'), dwgDate: dwgDate, castingDate: cDate, deliveryDate: dDate, status: newStatus }, "Edited Details");
+                setEditingEl(null); 
+            };
+
+            return (
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden fade-in relative flex flex-col h-full">
+                    <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-wrap gap-4 justify-between items-center flex-shrink-0">
+                        <div className="flex bg-white rounded-lg p-1 border border-slate-200">{[{id:'casting', icon:'hammer', lbl:'Casting Update'}, {id:'delivery', icon:'truck', lbl:'Delivery Update'}, {id:'all', icon:'search', lbl:'Search DB'}].map(t => (<button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-2 rounded-md text-sm font-bold flex items-center gap-2 transition ${tab === t.id ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}><Icon name={t.icon}/> {t.lbl}</button>))}</div>
+                        <div className="flex gap-2 items-center">
+                             <button onClick={handleExportExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-sm font-bold flex items-center gap-2 shadow-sm mr-2"><Icon name="fileExcel"/> Export Excel</button>
+                            <select onChange={e => setProjFilter(e.target.value)} className="p-2 border rounded text-sm bg-white text-slate-900 font-bold"><option value="">All Projects</option>{projects.map(p => <option key={p.id} value={p.projectId}>{p.name} (#{p.projectId})</option>)}</select>
+                            <input placeholder="Search ID..." onChange={e => setIdFilter(e.target.value)} className="p-2 border rounded text-sm w-32 bg-white text-slate-900 font-bold" />
+                            <input placeholder="Villa, Cluster..." onChange={e => setmetaFilter(e.target.value)} className="p-2 border rounded text-sm w-48 bg-white text-slate-900 font-bold" />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-x-auto overflow-y-auto">
+                        <div className="responsive-table">
+                            <table className="w-full table-min-800 text-sm text-left text-slate-600"><thead className="bg-slate-100 text-xs uppercase font-bold text-slate-500 sticky top-0 z-10"><tr><th className="p-4">Element ID</th><th className="p-4">Cluster</th><th className="p-4">Villa</th><th className="p-4">Type</th><th className="p-4">Dims (L x W)</th><th className="p-4">Vol (m³)</th><th className="p-4">DWG Date</th><th className="p-4">Dates (Cast & Del)</th><th className="p-4">Status</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{currentItems.map(el => (<tr key={el.id} className="hover:bg-blue-50 transition"><td className="p-4 font-bold text-slate-800">{el.elementId}</td><td className="p-4 text-xs">{el.cluster||'-'}</td><td className="p-4 text-xs">{el.villa||'-'}</td><td className="p-4">{el.type}</td><td className="p-4 font-mono text-xs">{cleanDim(el.length)} x {cleanDim(el.widthHeight)}</td><td className="p-4 font-mono text-xs font-bold">{parseFloat(el.volume || 0).toFixed(3)}</td><td className="p-4 text-xs font-mono text-slate-600">{el.dwgDate ? formatDate(el.dwgDate) : '-'}</td><td className="p-4 text-xs font-medium">{(el.castingDate || el.deliveryDate) ? (<div className="space-y-1"><div className="text-blue-700 font-bold">C: {el.castingDate ? formatDate(el.castingDate) : "-"}</div><div className="text-emerald-600 font-bold">D: {el.deliveryDate ? formatDate(el.deliveryDate) : "-"}</div></div>) : (<span className="text-slate-300">-</span>)}</td><td className="p-4"><span className={`px-2 py-1 rounded text-xs font-bold ${el.status==='Shipped' ? 'bg-green-100 text-green-700' : el.status==='Stockyard' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{el.status}</span></td><td className="p-4 text-center">\n  <div className="flex flex-col sm:flex-row items-center justify-center gap-2"><button onClick={() => setEditingEl(el)} className="w-full sm:w-auto text-blue-500 hover:text-blue-700 p-2 bg-blue-50 rounded hover:bg-blue-100 transition text-sm flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed" disabled={!canEditLocal}><Icon name="pencil" size={14}/></button>{tab === 'casting' && <button onClick={() => initiateAction(el.id, 'cast')} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed" disabled={!canEditLocal}>Cast</button>}{tab === 'delivery' && <button onClick={() => initiateAction(el.id, 'ship')} className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed" disabled={!canEditLocal}>Ship</button>}<button onClick={() => initiateAction(el.id, 'delete')} className="w-full sm:w-auto text-red-400 hover:text-red-600 p-2 rounded disabled:opacity-50 disabled:cursor-not-allowed" disabled={!isAdminLocal}><Icon name="trash" size={14}/></button>\n  </div>\n</td></tr>))}</tbody></table>
+                        </div>
+                    </div>
+                    {/* Pagination */}
+                    <div className="p-3 border-t bg-white flex justify-between items-center flex-shrink-0 shadow-inner"><span className="text-xs text-slate-900 font-bold">Total: {filtered.length} Elements</span><div className="flex items-center gap-2"><button onClick={() => setCurrentPage(p => math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 rounded border border-slate-300 bg-white text-slate-900 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-bold">Previous</button><span className="text-xs font-bold text-slate-900">Page {currentPage} of {totalPages || 1}</span><button onClick={() => setCurrentPage(p => math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="px-3 py-1 rounded border border-slate-300 bg-white text-slate-900 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-bold">Next</button></div></div>
+                    
+                    {actionmodal && (<div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 transform scale-100 transition-all"><h3 className="font-bold text-lg mb-2 text-slate-800 flex items-center gap-2">{actionmodal.type === 'delete' ? <Icon name="trash" className="text-red-500"/> : <Icon name="calendar" className="text-blue-500"/>}{actionmodal.type === 'delete' ? 'Confirm Deletion' : actionmodal.type === 'cast' ? 'Confirm Casting' : 'Confirm Shipment'}</h3>{actionmodal.type === 'delete' ? (<p className="text-slate-600 mb-6 text-sm">Are you sure you want to permanently delete this element? This action cannot be undone.</p>) : (<div className="mb-6"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Date</label><input type="date" value={actionDate} onChange={(e) => setActionDate(e.target.value)} className="w-full border-2 border-blue-100 rounded-lg p-3 text-sm font-bold text-slate-700 focus:border-blue-500 outline-none bg-white text-slate-900"/></div>)}<div className="flex gap-3 justify-end"><button onClick={() => setActionmodal(null)} className="px-4 py-2 rounded-lg text-slate-500 font-bold text-sm hover:bg-slate-100">Cancel</button><button onClick={confirmAction} className={`px-6 py-2 rounded-lg text-white font-bold text-sm shadow-lg ${actionmodal.type === 'delete' ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'}`}>{actionmodal.type === 'delete' ? 'Delete Now' : 'Confirm'}</button></div></div></div>)}
+                    {editingEl && (<div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 transform scale-100 transition-all"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800 flex items-center gap-2"><Icon name="pencil" className="text-blue-600"/> Edit Element</h3><button onClick={() => setEditingEl(null)}><Icon name="x"/></button></div><form onSubmit={handleSaveEdit} className="space-y-4"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Element ID (Read Only)</label><input value={editingEl.elementId} readOnly className="w-full p-3 border rounded bg-slate-100 text-slate-500 font-bold cursor-not-allowed"/></div><div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><input name="type" defaultValue={editingEl.type} className="w-full p-3 border rounded font-bold text-slate-800 bg-white"/></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Volume (m³)</label><input name="volume" defaultValue={editingEl.volume} className="w-full p-3 border-2 border-blue-100 rounded font-bold text-slate-800 focus:border-blue-500 outline-none bg-white"/></div></div><div className="grid grid-cols-2 gap-4"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Length</label><input name="length" defaultValue={editingEl.length} className="w-full p-3 border rounded font-bold text-slate-800 bg-white"/></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Width/Height</label><input name="widthHeight" defaultValue={editingEl.widthHeight} className="w-full p-3 border rounded font-bold text-slate-800 bg-white"/></div></div><div className="grid grid-cols-2 gap-4 bg-slate-50 p-2 rounded border"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Drawing Date (DWG)</label><input type="date" name="dwgDate" defaultValue={editingEl.dwgDate} className="w-full p-2 border rounded text-sm bg-white text-slate-900 font-bold"/></div><div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Casting Date</label><input type="date" name="castingDate" defaultValue={editingEl.castingDate} className="w-full p-2 border rounded text-sm bg-white text-slate-900 font-bold"/></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Delivery Date</label><input type="date" name="deliveryDate" defaultValue={editingEl.deliveryDate} className="w-full p-2 border rounded text-sm bg-white text-slate-900 font-bold"/></div></div></div><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setEditingEl(null)} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded">Cancel</button><button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-bold shadow-lg">Save Changes</button></div></form></div></div>)}
+                </div>
+            );
+        };
+
+        const WeeklyPlanner = ({ elements, projects, onUpdate, onImport, onPasteImport, onAdd, userRole }) => {
+            const canEditLocal = (userRole === 'admin' || userRole === 'editor');
+            const [selProj, setSelProj] = useState('');
+            const [idFilter, setIdFilter] = useState('');
+            const [metaFilter, setmetaFilter] = useState('');
+            const [selectedDate, setSelectedDate] = useState(null);
+            const dates = getNext7Days();
+
+            const { backlog, planned } = usememo(() => {
+                const p = elements.filter(e => {
+                    if (selProj === '' || String(e.projectNumber) !== String(selProj)) return false;
+                    if (idFilter && !String(e.elementId || '').toLowerCase().includes(idFilter.toLowerCase())) return false;
+                    if (metaFilter && !checkmetamatch(e, metaFilter)) return false;
+                    return !e.castingDate;
+                });
+                return { backlog: p.filter(e => !e.plannedDate), planned: p.filter(e => e.plannedDate && dates.includes(e.plannedDate)) };
+            }, [elements, selProj, idFilter, metaFilter]);
+
+            const handleBacklogDoubleClick = (id) => {
+                if (!selectedDate) { alert("?? Please click a Date Header (e.g., 'Today') to select it first."); return; }
+                onUpdate(id, { plannedDate: selectedDate }, "Scheduled via Double Click");
+            };
+
+            const handleDragStart = (e, id) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; };
+            const handleDragOver = (e) => { e.preventDefault(); e.currentTarget.classList.add('bg-blue-50'); };
+            const handleDragLeave = (e) => { e.currentTarget.classList.remove('bg-blue-50'); };
+            const handleDrop = (e, date) => { e.preventDefault(); e.currentTarget.classList.remove('bg-blue-50'); const id = e.dataTransfer.getData("text/plain"); if (id) { onUpdate(id, { plannedDate: date }, "Scheduled via Drag & Drop"); } };
+
+            return (
+                <div className="bg-white p-6 rounded-xl border border-slate-200 h-full fade-in flex flex-col">
+                    <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
+                        <div className="flex gap-2 items-center flex-1">
+                            <select onChange={e=>setSelProj(e.target.value)} className="p-2 border rounded font-bold text-slate-700 w-64 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none"><option value="">-- Select Project --</option>{projects.map(p=><option key={p.id} value={p.projectId}>{p.name} (#{p.projectId})</option>)}</select>
+                            <div className="relative"><Icon name="hashtag" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input placeholder="Search ID..." onChange={e => setIdFilter(e.target.value)} className="pl-9 p-2 border rounded text-sm w-40 shadow-sm bg-white text-slate-900 font-bold"/></div>
+                            <div className="relative"><Icon name="search" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input placeholder="Villa, Cluster..." onChange={e => setmetaFilter(e.target.value)} className="pl-9 p-2 border rounded text-sm w-48 shadow-sm bg-white text-slate-900 font-bold"/></div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={onPasteImport} disabled={!canEditLocal} className="disabled:opacity-50 disabled:cursor-not-allowed bg-purple-600 text-white px-3 py-2 rounded text-sm font-bold flex gap-2 items-center hover:bg-purple-700 transition shadow-sm"><Icon name="paste"/> Paste Data</button>
+                            <button onClick={onImport} disabled={!canEditLocal} className="disabled:opacity-50 disabled:cursor-not-allowed bg-emerald-600 text-white px-3 py-2 rounded text-sm font-bold flex gap-2 items-center hover:bg-emerald-700 transition shadow-sm"><Icon name="upload"/> Upload File</button>
+                            <button onClick={onAdd} disabled={!canEditLocal} className="disabled:opacity-50 disabled:cursor-not-allowed bg-blue-600 text-white px-3 py-2 rounded text-sm font-bold flex gap-2 items-center hover:bg-blue-700 transition shadow-sm"><Icon name="plus"/> Add</button>
+                        </div>
+                    </div>
+                    {!selProj ? (<div className="flex-1 flex flex-col items-center justify-center text-slate-400 bg-slate-50 rounded-xl border border-dashed"><Icon name="building" size={48} className="mb-4 text-slate-300"/><p className="font-medium">Select a project to start planning</p></div>) : (
+                        <div className="flex-1 flex gap-4 overflow-hidden h-full">
+                            <div className="flex-1 grid grid-cols-7 border rounded-xl overflow-hidden bg-white shadow-sm select-none">
+                                {dates.map(d => (
+                                    <div key={d} className={`border-r last:border-r-0 flex flex-col h-full transition-colors duration-200`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, d)}>
+                                        <div onClick={() => setSelectedDate(d)} className={`p-3 text-center border-b cursor-pointer hover:bg-blue-50 transition ${selectedDate === d ? 'bg-blue-600 text-white' : 'bg-slate-50 text-slate-800'}`}>
+                                            <span className={`block text-xs font-bold uppercase ${selectedDate === d ? 'text-blue-100' : 'text-slate-500'}`}>{new Date(d).toLocaleDateString('en-US',{weekday:'short'})}</span><span className="block text-lg font-bold">{new Date(d).getDate()}</span>
+                                        </div>
+                                        <div className="flex-1 p-2 space-y-2 overflow-y-auto bg-slate-50/30 min-h-[100px]">
+                                            {planned.filter(e=>e.plannedDate===d).map(e=>(<div key={e.id} draggable="true" onDragStart={(ev) => handleDragStart(ev, e.id)} className="bg-white border border-slate-200 p-2 rounded shadow-sm text-xs relative group font-bold text-slate-700 hover:border-blue-400 transition cursor-move"><div className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>{e.elementId}</div><button onClick={()=>onUpdate(e.id,{plannedDate:''}, "Removed from Schedule")} className="absolute top-1 right-1 text-red-400 hidden group-hover:block hover:bg-red-50 rounded p-0.5"><Icon name="x" size={12}/></button></div>))}
+                                            {planned.filter(e=>e.plannedDate===d).length === 0 && (<div className="h-full flex items-center justify-center text-slate-300 text-[10px] italic">Drop here</div>)}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="w-64 bg-white border rounded-xl flex flex-col shadow-sm">
+                                <div className="p-3 bg-slate-100 border-b flex justify-between items-center rounded-t-xl"><h3 className="font-bold text-sm text-slate-700">Backlog</h3><span className="bg-slate-200 text-slate-600 text-[10px] px-2 py-0.5 rounded-full font-bold">{backlog.length}</span></div>
+                                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                                    {backlog.length === 0 ? (<div className="text-center text-xs text-slate-400 mt-10 italic">No items found</div>) : (backlog.map(e => (<div key={e.id} draggable="true" onDragStart={(ev) => handleDragStart(ev, e.id)} onDoubleClick={() => handleBacklogDoubleClick(e.id)} className="bg-white border border-slate-200 p-2 rounded text-xs font-medium cursor-move hover:border-blue-500 hover:shadow-md transition select-none group active:cursor-grabbing"><div className="flex justify-between items-center"><span className="font-bold text-slate-700">{e.elementId}</span><span className="text-[10px] text-slate-400">{e.type}</span></div><div className="text-[10px] text-slate-400 mt-1">{cleanDim(e.length)} x {cleanDim(e.widthHeight)}</div></div>)))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ReportsView = ({ elements, projects }) => {
+            const [type, setType] = useState('production'); 
+            const [mode, setmode] = useState('summary'); 
+            const [start, setStart] = useState(new Date().toISOString().split('T')[0]);
+            const [end, setEnd] = useState(new Date().toISOString().split('T')[0]);
+            const [proj, setProj] = useState('');
+            const [search, setSearch] = useState('');
+
+            const filteredData = usememo(() => elements.filter(el => {
+                if(proj && String(el.projectNumber).trim() !== String(proj).trim()) return false;
+                let dbDate = type === 'production' ? el.castingDate : el.deliveryDate;
+                if (!dbDate) return false;
+                dbDate = String(dbDate).trim().substring(0, 10); 
+                if (dbDate < start || dbDate > end) return false;
+                if (search) {
+                    const s = search.toLowerCase();
+                    const matchmeta = checkmetamatch(el, search); 
+                    const matchId = String(el.elementId || '').toLowerCase().includes(s);
+                    if (!matchmeta && !matchId) return false;
+                }
+                return true;
+            }), [elements, type, start, end, proj, search]);
+
+            const summaryData = usememo(() => {
+                if (mode !== 'summary') return [];
+                const groups = {};
+                filteredData.forEach(el => {
+                    const normalizedType = (el.type || 'Unknown').trim();
+                    const key = `${el.projectNumber}_${normalizedType}`;
+                    if (!groups[key]) groups[key] = { projectNo: el.projectNumber, projectName: el.projectName, type: normalizedType, count: 0, volume: 0 };
+                    groups[key].count += 1;
+                    groups[key].volume += parseFloat(el.volume || 0);
+                });
+                return Object.values(groups).sort((a, b) => String(a.projectNo).localeCompare(String(b.projectNo)));
+            }, [filteredData, mode]);
+
+            const totalCount = summaryData.reduce((acc, curr) => acc + curr.count, 0);
+            const totalVol = summaryData.reduce((acc, curr) => acc + curr.volume, 0);
+
+            return (
+                <div className="bg-white rounded-xl border border-slate-200 min-h-screen fade-in print-container">
+                    <div className="p-4 border-b bg-slate-50 no-print flex gap-4 items-end flex-wrap">
+                        <div><label className="block text-[10px] font-bold uppercase text-slate-500">Report Type</label><select onChange={e=>setType(e.target.value)} value={type} className="p-2 border rounded text-sm font-bold text-slate-700 w-32 bg-white text-slate-900"><option value="production">Production</option><option value="delivery">Delivery</option></select></div>
+                        <div><label className="block text-[10px] font-bold uppercase text-slate-500">View mode</label><select onChange={e=>setmode(e.target.value)} value={mode} className="p-2 border rounded text-sm font-bold text-slate-700 w-32 bg-white text-slate-900"><option value="summary">Summary</option><option value="detailed">Detailed List</option></select></div>
+                        <div><label className="block text-[10px] font-bold uppercase text-slate-500">Search</label><div className="relative"><Icon name="search" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input type="text" placeholder="Villa, Cluster, ID..." value={search} onChange={e=>setSearch(e.target.value)} className="pl-9 p-2 border rounded text-sm w-48 bg-white text-slate-900 font-bold"/></div></div>
+                        <div><label className="block text-[10px] font-bold uppercase text-slate-500">Project</label><select onChange={e=>setProj(e.target.value)} className="p-2 border rounded text-sm w-48 bg-white text-slate-900 font-bold"><option value="">All Projects</option>{projects.map(p=><option key={p.id} value={p.projectId}>{p.name}</option>)}</select></div>
+                        <div><label className="block text-[10px] font-bold uppercase text-slate-500">From</label><input type="date" value={start} onChange={e=>setStart(e.target.value)} className="p-2 border rounded text-sm bg-white text-slate-900 font-bold"/></div>
+                        <div><label className="block text-[10px] font-bold uppercase text-slate-500">To</label><input type="date" value={end} onChange={e=>setEnd(e.target.value)} className="p-2 border rounded text-sm bg-white text-slate-900 font-bold"/></div>
+                        <button onClick={()=>window.print()} className="bg-slate-800 text-white px-4 py-2 rounded text-sm font-bold flex gap-2 items-center hover:bg-slate-900 transition ml-auto"><Icon name="print"/> Print</button>
+                    </div>
+                    <div className="p-8 text-black">
+                        <div className="text-center mb-6"><h1 className="text-xl font-bold uppercase tracking-wide text-slate-900">Naran Precast Concrete Company LLC.</h1><h2 className="text-lg font-medium text-slate-700 mt-1">{type.charAt(0).toUpperCase() + type.slice(1)} {mode === 'summary' ? 'Summary' : ''} Report</h2><p className="text-xs text-slate-500 mt-1">Period: {formatDate(start)} to {formatDate(end)}</p></div>
+                        {mode === 'summary' && ( <div className="border border-slate-300 responsive-table"><table className="w-full table-min-640 text-sm border-collapse"><thead><tr className="bg-[#005a8d] text-white"><th className="p-2 border-r border-white/20 text-center w-24">ProjectNo</th><th className="p-2 border-r border-white/20 text-center">ProjectName</th><th className="p-2 border-r border-white/20 text-center">Type</th><th className="p-2 border-r border-white/20 text-center w-24">Count</th><th className="p-2 text-center w-32">Total Vol</th></tr></thead><tbody>{summaryData.length === 0 ? (<tr><td colSpan="5" className="p-8 text-center italic text-gray-400">No data found for this period.</td></tr>) : (summaryData.map((row, i) => (<tr key={i} className="border-b border-slate-200 hover:bg-slate-50"><td className="p-2 border-r border-slate-200 text-center font-mono">{row.projectNo}</td><td className="p-2 border-r border-slate-200 text-center">{row.projectName}</td><td className="p-2 border-r border-slate-200 text-center">{row.type}</td><td className="p-2 border-r border-slate-200 text-center font-bold">{row.count}</td><td className="p-2 text-center font-mono">{row.volume.toFixed(3)}</td></tr>)))}</tbody><tfoot><tr className="font-bold bg-white border-t-2 border-slate-300"><td colSpan="3" className="p-2 text-right pr-4 text-slate-800">Total:</td><td className="p-2 text-center border-l border-slate-200">{totalCount}</td><td className="p-2 text-center border-l border-slate-200">{totalVol.toFixed(3)}</td></tr></tfoot></table></div> )}
+                        {mode === 'detailed' && ( <div className="responsive-table"><table className="w-full table-min-800 text-xs border-collapse border border-slate-300"><thead><tr className="bg-gray-100 border-b-2 border-black"><th className="p-2 text-left border-r">Date</th><th className="p-2 text-left border-r">Project</th><th className="p-2 text-left border-r">Element ID</th><th className="p-2 text-left border-r">Cluster</th><th className="p-2 text-left border-r">Villa</th><th className="p-2 text-left border-r">Type</th><th className="p-2 text-center border-r">Dimensions</th><th className="p-2 text-right">Vol (m³)</th></tr></thead><tbody>{filteredData.length === 0 ? (<tr><td colSpan="8" className="p-8 text-center italic text-gray-400">No records found.</td></tr>) : (filteredData.map((el, i) => (<tr key={el.id} className={`border-b border-slate-200 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}><td className="p-2 border-r">{formatDate(type === 'production' ? el.castingDate : el.deliveryDate)}</td><td className="p-2 border-r">{el.projectName}</td><td className="p-2 border-r font-bold">{el.elementId}</td><td className="p-2 border-r text-xs">{el.cluster || '-'}</td><td className="p-2 border-r text-xs">{el.villa || '-'}</td><td className="p-2 border-r">{el.type}</td><td className="p-2 border-r text-center">{cleanDim(el.length)}x{cleanDim(el.widthHeight)}</td><td className="p-2 text-right">{parseFloat(el.volume || 0).toFixed(3)}</td></tr>)))}</tbody><tfoot><tr className="font-bold bg-gray-100 border-t-2 border-black"><td colSpan="7" className="p-2 text-right">TOTAL VOL:</td><td className="p-2 text-right">{filteredData.reduce((a, b) => a + parseFloat(b.volume || 0), 0).toFixed(3)}</td></tr></tfoot></table></div> )}
+                    </div>
+                </div>
+            );
+        };
+        
+        const LogsView = ({ user, userRole }) => {
+            const isAdminLocal = (userRole === 'admin');
+            const [logs, setLogs] = useState([]);
+            const [recycle, setRecycle] = useState([]);
+            const [logTab, setLogTab] = useState('activity');
+
+            useEffect(() => { const unsub = db.collection('logs').orderBy('timestamp', 'desc').limit(50).onSnapshot(s => setLogs(s.docs.map(d => d.data()))); return unsub; }, []);
+            useEffect(() => { const unsub = db.collection('recycle').orderBy('deletedAt','desc').onSnapshot(s => setRecycle(s.docs.map(d => ({ id: d.id, ...d.data() })))); return unsub; }, []);
+
+                    const handleRestoreRecycle = async (item) => {
+                if (!isAdminLocal) { alert('Permission denied: only admins can restore deleted items.'); return; }
+                if (!confirm(`Restore ${item.__originalId || item.id} ?`)) return;
+                try {
+                    const source = item.__recycledFrom || 'elements';
+                    const originalId = item.__originalId || item.id.replace(/^note_/, '').replace(/^project_/, '');
+                    // copy back to original collection
+                    // clean metadata fields before restoring
+                    const restoreData = Object.fromEntries(Object.entries(item).filter(([k]) => !k.startsWith('__') && k !== 'id' && k !== 'deletedAt' && k !== 'deletedBy'));
+                    await db.collection(source).doc(originalId).set(restoreData);
+                    // remove from recycle
+                    await db.collection('recycle').doc(item.id).delete();
+                    // log
+                    await db.collection('logs').add({ timestamp: new Date().toISOString(), user: user?.email || 'unknown', action: 'RESTORE', details: `Restored ${originalId} to ${source}` });
+                    alert('Restored.');
+                } catch(e) { console.error(e); alert('Restore failed: ' + e.message); }
+            };
+
+            const handlePermanentlyDeleteRecycle = async (id) => {
+                if (!isAdminLocal) { alert('Permission denied: only admins can permanently delete items.'); return; }
+                if (!confirm('Permanently delete this item? This cannot be undone.')) return;
+                try {
+                    await db.collection('recycle').doc(id).delete();
+                    await db.collection('logs').add({ timestamp: new Date().toISOString(), user: user?.email || 'unknown', action: 'DELETE_PERmANENT', details: `Permanently deleted recycle id ${id}` });
+                    alert('Permanently deleted.');
+                } catch(e) { console.error(e); alert('Delete failed: ' + e.message); }
+            };
+
+            return (
+                <div className="bg-white rounded-xl border border-slate-200 h-full flex flex-col fade-in p-6">
+                    <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2"><Icon name="shield"/> System Activity Log</h2>
+                    <div className="flex-1 overflow-auto border rounded-lg p-4">
+                                <div className="mb-4">
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => setLogTab('activity')} className={`px-3 py-1 rounded ${logTab === 'activity' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700'}`}>Recent Activity</button>
+                                        <button onClick={() => setLogTab('recycle')} className={`px-3 py-1 rounded ${logTab === 'recycle' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700'}`}>Recycle Bin</button>
+                                    </div>
+                                </div>
+
+                                {logTab === 'activity' && (
+                                    <div className="mb-6">
+                                        <h3 className="font-bold text-slate-800 mb-2">Recent Activity</h3>
+                                        <div className="overflow-auto max-h-48 border rounded bg-white">
+                                            <table className="w-full table-min-640 text-sm text-left"><thead className="bg-slate-100 sticky top-0"><tr><th className="p-3">Time</th><th className="p-3">User</th><th className="p-3">Action</th><th className="p-3">Details</th></tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log, i) => (<tr key={i} className="hover:bg-slate-50"><td className="p-3 text-xs font-mono text-slate-500">{new Date(log.timestamp).toLocaleString()}</td><td className="p-3 font-bold text-blue-600">{log.user}</td><td className="p-3 font-bold uppercase text-xs"><span className={`px-2 py-1 rounded ${log.action==='DELETE'?'bg-red-100 text-red-700':log.action==='CREATE'?'bg-green-100 text-green-700':'bg-blue-100 text-blue-700'}`}>{log.action}</span></td><td className="p-3 text-slate-600">{log.details}</td></tr>))}</tbody></table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {logTab === 'recycle' && (
+                                    <div>
+                                        <h3 className="font-bold text-slate-800 mb-2">Recycle Bin</h3>
+                                        <p className="text-xs text-slate-500 mb-2">Deleted items are kept here so they can be restored or permanently removed.</p>
+                                        <div className="overflow-auto max-h-56 border rounded bg-white">
+                                            <table className="w-full table-min-640 text-sm text-left"><thead className="bg-slate-100 sticky top-0"><tr><th className="p-2 text-slate-700">ID</th><th className="p-2 text-slate-700">Type</th><th className="p-2 text-slate-700">Project / Name</th><th className="p-2 text-slate-700">Deleted At</th><th className="p-2 text-center text-slate-700">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{recycle.length === 0 ? (<tr><td colSpan="5" className="p-4 text-center text-xs text-gray-400 italic">Recycle Bin is empty.</td></tr>) : (recycle.map((it, i) => (<tr key={it.id}><td className="p-2 font-mono text-xs text-slate-800 break-all">{it.__originalId || it.id}</td><td className="p-2 text-xs text-slate-800">{it.__recycledFrom || 'unknown'}</td><td className="p-2 text-xs text-slate-800 break-words">{it.projectName || it.elementId || it.name || '-'}</td><td className="p-2 text-xs text-slate-800">{it.deletedAt ? new Date(it.deletedAt).toLocaleString() : '-'}</td><td className="p-2 text-center"><div className="flex items-center justify-center gap-2"><button onClick={() => handleRestoreRecycle(it)} className="px-3 py-1 bg-emerald-600 text-white rounded text-xs font-bold hover:bg-emerald-700">Restore</button><button onClick={() => handlePermanentlyDeleteRecycle(it.id)} className="px-3 py-1 bg-red-500 text-white rounded text-xs font-bold hover:bg-red-600">Delete</button></div></td></tr>)))}</tbody></table>
+                                        </div>
+                                    </div>
+                                )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- USER mANAGEmENT (ADmIN) ---
+        const UsersView = ({ userRole }) => {
+            const [users, setUsers] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [newUid, setNewUid] = useState('');
+            const [newEmail, setNewEmail] = useState('');
+            const [newName, setNewName] = useState('');
+            const [newRole, setNewRole] = useState('viewer');
+
+            useEffect(() => {
+                if (userRole !== 'admin') { setUsers([]); setLoading(false); return; }
+                const unsub = db.collection('users').orderBy('email').onSnapshot(s => {
+                    setUsers(s.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false);
+                }, err => { console.error('users fetch err', err); setLoading(false); });
+                return () => unsub();
+            }, [userRole]);
+
+            const saveRole = async (uid, role) => {
+                if (userRole !== 'admin') { alert('Only admins can change roles.'); return; }
+                try { await db.collection('users').doc(uid).set({ role }, { merge: true }); alert('Saved.'); }
+                catch(e) { console.error(e); alert('Failed to save: ' + e.message); }
+            };
+
+            const saveProfile = async () => {
+                if (userRole !== 'admin') { alert('Only admins can create profiles.'); return; }
+                if (!newUid) return alert('UID required. See Firebase Authentication console for user UID.');
+                try {
+                    await db.collection('users').doc(newUid).set({ name: newName || newEmail, email: newEmail, role: newRole, createdAt: new Date().toISOString() });
+                    setNewUid(''); setNewEmail(''); setNewName(''); setNewRole('viewer');
+                    alert('User profile created (FireStore). Note: Authentication user must already exist, or invite them separately.');
+                } catch(e) { console.error(e); alert('Failed to create profile: ' + e.message); }
+            };
+
+            const createInvite = async () => {
+                if (userRole !== 'admin') { alert('Only admins can invite.'); return; }
+                if (!newEmail) return alert('Enter an email to invite.');
+                try {
+                    // Create an invitations doc ³ server or admin will pick up and send an email/invite flow
+                    await db.collection('invitations').add({ email: newEmail, role: newRole, name: newName || '', invitedAt: new Date().toISOString() });
+                    alert('Invite request saved ³ please send the sign-in information via your normal channels.');
+                } catch(e) { console.error(e); alert('Failed to create invite: ' + e.message); }
+            };
+
+            const deleteProfile = async (uid) => {
+                if (userRole !== 'admin') { alert('Only admins can delete profiles.'); return; }
+                if (!confirm('Delete user profile ' + uid + ' ?')) return;
+                try { await db.collection('users').doc(uid).delete(); alert('Deleted profile doc (user in Authentication not affected).'); }
+                catch(e) { console.error(e); alert('Delete failed: ' + e.message); }
+            };
+
+            return (
+                <div className="bg-white rounded-xl border border-slate-200 h-full p-6 fade-in flex flex-col">
+                    <div className="flex items-center justify-between mb-4"><h2 className="text-lg font-bold text-slate-800">User management ³ Admin</h2><p className="text-xs text-slate-500">Create profiles, change roles, and create invites.</p></div>
+                    <div className="p-4 border rounded-lg mb-4 bg-slate-50">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <input placeholder="Firebase UID (required to link auth user)" value={newUid} onChange={e=>setNewUid(e.target.value)} className="p-2 border rounded" />
+                            <input placeholder="Email (for invite)" value={newEmail} onChange={e=>setNewEmail(e.target.value)} className="p-2 border rounded" />
+                            <input placeholder="Name" value={newName} onChange={e=>setNewName(e.target.value)} className="p-2 border rounded" />
+                            <select value={newRole} onChange={e=>setNewRole(e.target.value)} className="p-2 border rounded w-full md:w-48"><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select>
+                            <div className="flex gap-2"><button onClick={saveProfile} className="bg-blue-600 text-white px-3 py-2 rounded">Create Profile</button><button onClick={createInvite} className="bg-emerald-600 text-white px-3 py-2 rounded">Create Invitation</button></div>
+                            <div className="text-xs text-slate-400 italic">Tip: UID is visible under Firebase Console ? Authentication ? click user ? UID. Creating an 'invitation' does not create an auth user; it's an app-level invite record your IT or server can consume.</div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-auto border rounded p-3 bg-white">
+                        {loading ? (<div className="text-center p-8 text-slate-400">Loading users...</div>) : (
+                            users.length === 0 ? (<div className="text-center text-xs text-slate-400 italic p-8">No user profiles found.</div>) : (
+                                <table className="w-full text-sm text-left table-min-640"><thead><tr className="bg-slate-100 text-xs"><th className="p-2 text-slate-700">UID</th><th className="p-2 text-slate-700">Email</th><th className="p-2 text-slate-700">Name</th><th className="p-2 text-slate-700">Role</th><th className="p-2 text-slate-700">Disabled</th><th className="p-2 text-center text-slate-700">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{users.map(u => (<tr key={u.id}><td className="p-2 font-mono text-xs text-slate-800 break-all">{u.id}</td><td className="p-2 text-xs text-slate-800 break-words">{u.email || '-'}</td><td className="p-2 text-xs font-bold text-slate-900">{u.name || '-'}</td><td className="p-2"><select value={u.role || 'viewer'} onChange={e => setUsers(users.map(x => x.id === u.id ? ({...x, role: e.target.value}) : x))} className="p-1 border rounded text-sm"><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select></td><td className="p-2 text-xs"><input type="checkbox" checked={!!u.disabled} onChange={e => setUsers(users.map(x => x.id === u.id ? ({...x, disabled: e.target.checked}) : x))} /></td><td className="p-2 text-center"><div className="flex items-center justify-center gap-2"><button onClick={() => saveRole(u.id, u.role || 'viewer')} className="px-3 py-1 bg-blue-600 text-white rounded text-xs">Save</button><button onClick={() => deleteProfile(u.id)} className="px-3 py-1 bg-red-500 text-white rounded text-xs">Delete</button></div></td></tr>))}</tbody></table>
+                            ) ) }
+                    </div>
+                </div>
+            );
+        };
+
+        // ==================================================================================
+        // 6. mAIN APPLICATION LOGIC
+        // ==================================================================================
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [authLoading, setAuthLoading] = useState(true); 
+            const [userRole, setUserRole] = useState(null);
+            const [userProfile, setUserProfile] = useState(null);
+            const [view, setView] = useState('projects'); 
+            const [elements, setElements] = useState([]);
+            const [projects, setProjects] = useState([]);
+            const [notes, setNotes] = useState([]);
+            
+            const [dnmodal, setDnmodal] = useState(false);
+            const [histmodal, setHistmodal] = useState(false);
+            const [printDN, setPrintDN] = useState(null);
+            const [isImportOpen, setIsImportOpen] = useState(false);
+            const [isPasteImportOpen, setIsPasteImportOpen] = useState(false); 
+            const [isAddOpen, setIsAddOpen] = useState(false);
+            const [isBatchAddOpen, setIsBatchAddOpen] = useState(false);
+            const [isProjOpen, setIsProjOpen] = useState(false);
+            const [editingProj, setEditingProj] = useState(null); 
+            const [summaryProj, setSummaryProj] = useState(null);
+
+            const [dnProj, setDnProj] = useState('');
+            const [dnItems, setDnItems] = useState([]);
+            const [dnAddr, setDnAddr] = useState('');
+            const [dnSearch, setDnSearch] = useState(''); 
+            const [dnmetaSearch, setDnmetaSearch] = useState(''); 
+            const [histSearch, setHistSearch] = useState('');
+            const [dnDate, setDnDate] = useState(new Date().toISOString().split('T')[0]);
+            const [ismobilemenuOpen, setIsmobilemenuOpen] = useState(false);
+            
+            const [addRows, setAddRows] = useState([{ id: '', cluster: '', villa: '', type: '', len: '', wh: '', vol: '', qty: 1 }]);
+            const [batchProj, setBatchProj] = useState('');
+
+            useEffect(() => { const unsubscribe = auth.onAuthStateChanged((u) => { setUser(u); setAuthLoading(false); }); return unsubscribe; }, []);
+
+            // Subscribe to current user's Firestore profile to read role & metadata
+            useEffect(() => {
+                if (!user) { setUserRole(null); setUserProfile(null); return; }
+                const uref = db.collection('users').doc(user.uid);
+                const unsub = uref.onSnapshot(doc => {
+                    if (doc.exists) {
+                        const d = doc.data();
+                        setUserRole(d.role || 'viewer');
+                        setUserProfile(d || null);
+                    } else {
+                        // default to viewer/read-only if no profile exists
+                        setUserRole('viewer');
+                        setUserProfile(null);
+                    }
+                }, (err) => { console.error('User profile load error', err); setUserRole('viewer'); setUserProfile(null); });
+                return () => unsub();
+            }, [user]);
+            useEffect(() => { if(!user) return; const unsubEl = db.collection('elements').orderBy('elementId').onSnapshot(s => setElements(s.docs.map(d => ({id:d.id, ...d.data()})))); const unsubPr = db.collection('projects').orderBy('name').onSnapshot(s => setProjects(s.docs.map(d => ({id:d.id, ...d.data()})))); const unsubNt = db.collection('delivery_notes').orderBy('date','desc').onSnapshot(s => setNotes(s.docs.map(d => ({id:d.id, ...d.data()})))); return () => { unsubEl(); unsubPr(); unsubNt(); }; }, [user]);
+
+            const logActivity = (action, details) => { if(user) db.collection('logs').add({ timestamp: new Date().toISOString(), user: user.email, action, details }); };
+
+            // helpers to check privileges
+            const canEdit = () => (userRole === 'admin' || userRole === 'editor');
+            const isAdminUser = () => (userRole === 'admin');
+            const handleDnProjChange = (e) => { const val = e.target.value; setDnProj(val); const p = projects.find(proj => proj.projectId === val); if(p && p.address) setDnAddr(p.address); else setDnAddr(''); };
+            const handleUpdate = (id, data, logmsg) => { if (!canEdit()) { alert('Permission denied: read-only account.'); return; } db.collection('elements').doc(id).update(data); if(logmsg) logActivity('UPDATE', logmsg); };
+            const handleDelete = async (id) => {
+                if (!isAdminUser()) { alert('Permission denied: only admins can delete.'); return; }
+                if (!confirm("Delete?")) return;
+                try {
+                    const ref = db.collection('elements').doc(id);
+                    const doc = await ref.get();
+                    if (!doc.exists) { alert('Item not found.'); return; }
+                    const data = doc.data();
+                    // copy into recycle collection (keep same id for easy restore)
+                    await db.collection('recycle').doc(id).set({ ...data, __recycledFrom: 'elements', __originalId: id, deletedAt: new Date().toISOString(), deletedBy: user?.email || 'unknown' });
+                    await ref.delete();
+                    logActivity('DELETE', `moved Element ID: ${id} to Recycle Bin`);
+                } catch (e) { console.error(e); alert('Delete failed: ' + e.message); }
+            };
+            const handleDeleteNote = async (noteId) => {
+                if (!isAdminUser()) { alert('Permission denied: only admins can delete delivery notes.'); return; }
+                if (!window.confirm("Are you sure you want to delete this Delivery Note?")) return;
+                try {
+                    const nref = db.collection('delivery_notes').doc(noteId);
+                    const ndoc = await nref.get();
+                    if (!ndoc.exists) { alert('Delivery Note not found'); return; }
+                    const data = ndoc.data();
+                    // store with a note_ prefix in recycle to avoid key collisions
+                    await db.collection('recycle').doc(`note_${noteId}`).set({ ...data, __recycledFrom: 'delivery_notes', __originalId: noteId, deletedAt: new Date().toISOString(), deletedBy: user?.email || 'unknown' });
+                    await nref.delete();
+                    logActivity('DELETE', `moved Delivery Note ID: ${noteId} to Recycle Bin`);
+                } catch (e) { console.error(e); alert('Error: ' + e.message); }
+            };
+            const handleDeleteProject = async (id) => {
+                if (!isAdminUser()) { alert('Permission denied: only admins can delete projects.'); return; }
+                const password = prompt("?? DANGER ZONE ??\n\nThis will move the project and ALL its elements to Recycle Bin.\n\nEnter Admin Password to confirm:");
+                if (password !== "admin123") { if (password !== null) alert("? Incorrect Password."); return; }
+                try {
+                    const pjRef = db.collection('projects').doc(id);
+                    const pjDoc = await pjRef.get();
+                    if (pjDoc.exists) {
+                        const pjData = pjDoc.data();
+                        await db.collection('recycle').doc(`project_${id}`).set({ ...pjData, __recycledFrom: 'projects', __originalId: id, deletedAt: new Date().toISOString(), deletedBy: user?.email || 'unknown' });
+                    }
+                    const p = projects.find(x => x.id === id);
+                    if (p) {
+                        const batch = db.batch();
+                        const elems = elements.filter(e => String(e.projectNumber) === String(p.projectId));
+                        elems.forEach(e => {
+                            // copy element data to recycle (same id)
+                            batch.set(db.collection('recycle').doc(e.id), { ...e, __recycledFrom: 'elements', __originalId: e.id, deletedAt: new Date().toISOString(), deletedBy: user?.email || 'unknown' });
+                            batch.delete(db.collection('elements').doc(e.id));
+                        });
+                        await batch.commit();
+                    }
+                    // finally delete project doc
+                    await pjRef.delete();
+                    logActivity('DELETE', `moved Project ID: ${id} and its elements to Recycle Bin`);
+                    alert('Project moved to Recycle Bin.');
+                } catch (e) { console.error(e); alert('Error: ' + e.message); }
+            };
+            const handleAddProj = (e) => { if (!canEdit()) { alert('Permission denied: read-only account.'); return; } e.preventDefault(); const fd = new FormData(e.target); db.collection('projects').doc(`PROJ_${fd.get('id')}`).set({ name: fd.get('name'), projectId: String(fd.get('id')), address: fd.get('address') }); logActivity('CREATE', `Created Project: ${fd.get('name')}`); setIsProjOpen(false); };
+            const handleUpdateProject = (e) => { if (!canEdit()) { alert('Permission denied: read-only account.'); return; } e.preventDefault(); const fd = new FormData(e.target); if(!editingProj) return; db.collection('projects').doc(editingProj.id).update({ name: fd.get('name'), address: fd.get('address') }).then(() => { logActivity('UPDATE', `Updated Project: ${editingProj.name}`); setEditingProj(null); }); };
+            const handleAddElem = (e) => { if (!canEdit()) { alert('Permission denied: read-only account.'); return; } e.preventDefault(); const fd = new FormData(e.target); const proj = projects.find(p => p.id === fd.get('proj')); const docId = `${proj.projectId}_${fd.get('id')}`.replace(/\//g, "_"); db.collection('elements').doc(docId).set({ elementId: fd.get('id'), projectNumber: String(proj.projectId), projectName: proj.name, type: fd.get('type'), length: fd.get('len'), widthHeight: fd.get('wh'), volume: fd.get('vol'), status: 'Scheduled', castingDate:'', deliveryDate:'', plannedDate:'' }); logActivity('CREATE', `Added Element: ${fd.get('id')} to Project ${proj.name}`); setIsAddOpen(false); };
+            
+            // QC status UI removed from Delivery view ³ handler no longer needed
+
+            const handleBatchSave = async () => {
+                if (!canEdit()) { alert('Permission denied: read-only account.'); return; }
+                if(!batchProj) { alert("Please select a project."); return; }
+                const proj = projects.find(p => p.projectId === batchProj);
+                if(!proj) return;
+                const newIds = [];
+                addRows.forEach(row => { const qty = parseInt(row.qty) || 1; for(let i=0; i<qty; i++) { let uniqueId = row.id; if(qty > 1) uniqueId = `${row.id}-${i+1}`; newIds.push(uniqueId); } });
+                const duplicates = newIds.filter(id => elements.some(e => e.elementId === id && String(e.projectNumber) === String(batchProj)));
+                if (duplicates.length > 0) { if (!confirm(`?? WARNING: ${duplicates.length} elements already exist.\n\nIf you continue, existing data will be UPDATED.\nDo you want to proceed?`)) { return; } }
+                const batch = db.batch(); let count = 0;
+                addRows.forEach(row => { if(row.id.trim()) { const qty = parseInt(row.qty) || 1; for(let i = 0; i < qty; i++) { let uniqueId = row.id; if(qty > 1) uniqueId = `${row.id}-${i+1}`; const docId = `${batchProj}_${uniqueId}`.replace(/\//g, "_"); batch.set(db.collection('elements').doc(docId), { elementId: uniqueId, projectNumber: String(batchProj), projectName: proj.name, cluster: row.cluster, villa: row.villa, type: row.type, length: row.len, widthHeight: row.wh, volume: row.vol, status: 'Scheduled', castingDate: '', deliveryDate: '' }, {merge: true}); count++; } } });
+                try { await batch.commit(); alert(`Saved ${count} elements!`); logActivity('CREATE', `Batch added ${count} elements to ${proj.name}`); setIsBatchAddOpen(false); setAddRows([{ id: '', cluster: '', villa: '', type: '', len: '', wh: '', vol: '', qty: 1 }]); } catch(e) { alert("Error saving: " + e.message); }
+            };
+            const handleAddRow = () => { const prev = addRows[addRows.length - 1]; setAddRows([...addRows, { id: '', cluster: prev.cluster, villa: prev.villa, type: prev.type, len: prev.len, wh: prev.wh, vol: prev.vol, qty: 1 }]); };
+            const handleRemoveRow = (idx) => setAddRows(addRows.filter((_, i) => i !== idx));
+            const handleRowChange = (idx, field, val) => { const newRows = [...addRows]; newRows[idx][field] = val; setAddRows(newRows); };
+
+            const handleCreateDN = () => { if (!canEdit()) { alert('Permission denied: read-only account.'); return; } const num = `DN-${Date.now().toString().slice(-6)}`; const batch = db.batch(); const noteRef = db.collection('delivery_notes').doc(); batch.set(noteRef, { dnNumber: num, project: dnProj, address: dnAddr, date: dnDate, items: dnItems }); dnItems.forEach(i => batch.update(db.collection('elements').doc(i.id), { status:'Shipped', deliveryDate: dnDate })); batch.commit().then(() => { logActivity('DELIVERY', `Created Delivery Note ${num} with ${dnItems.length} items.`); setDnmodal(false); setPrintDN({ dnNumber: num, project: dnProj, address: dnAddr, date: dnDate, items: dnItems }); }); };
+            const toggleDnItem = (el) => { if(dnItems.find(i=>i.id===el.id)) setDnItems(dnItems.filter(i=>i.id!==el.id)); else setDnItems([...dnItems, el]); };
+            
+            if (authLoading) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white"><Icon name="spinner" size={40}/></div>;
+            if (!user) return <Login />;
+
+            if(printDN) return (
+                <div className="bg-white min-h-screen p-8 print:p-6 print:m-0 print:w-full print:h-screen text-black font-sans text-xs flex flex-col relative">
+                    <div className="no-print fixed top-4 right-4"><button onClick={()=>setPrintDN(null)} className="bg-gray-800 text-white px-4 py-2 rounded shadow-lg hover:bg-gray-700">Close Preview</button></div>
+                    <div className="flex-1">
+                        <div className="flex justify-between items-end mb-2 border-b-2 border-black pb-2">
+                            <div className="flex items-center">
+                                {/* Logo (prints too) */}
+                                <img src="/logo.svg" alt="Naran Precast Logo" className="h-12 w-auto mr-3" />
+                                <div>
+                                    <h1 className="text-xl font-extrabold uppercase tracking-wide text-blue-900">NARAN PRECAST CONCRETE CO.</h1>
+                                </div>
+                            </div>
+                            <h2 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest text-blue-900 drop-shadow-sm">DELIVERY NOTE</h2>
+                        </div>
+                        <div className="flex justify-between items-start mb-4 text-xs font-bold text-slate-900"><div className="space-y-1"><p className="flex"><span className="w-16">To:</span> <span className="font-normal">{printDN.address}</span></p><p className="flex"><span className="w-16">Project:</span> <span className="font-normal">{printDN.project}</span></p></div><div className="text-right space-y-1"><p>Date: <span className="font-normal ml-2">{formatDate(printDN.date)}</span></p><p>DN #: <span className="font-normal ml-2">{printDN.dnNumber}</span></p></div></div>
+                        <table className="w-full text-[10px] border border-black border-collapse mb-4"><thead><tr className="bg-gray-50"><th className="border border-black p-1 text-center w-10">S.No</th><th className="border border-black p-1 text-left">Element ID</th><th className="border border-black p-1 text-left">Type</th><th className="border border-black p-1 text-center w-12">Qty</th><th className="border border-black p-1 text-right w-24">Vol (m³)</th></tr></thead><tbody>{printDN.items.map((item,i)=>(<tr key={i}><td className="border border-black p-1 text-center">{i+1}</td><td className="border border-black p-1 font-bold">{item.elementId}</td><td className="border border-black p-1 uppercase">{item.type}</td><td className="border border-black p-1 text-center">{item.qty ? parseInt(item.qty,10) : 1}</td><td className="border border-black p-1 text-right">{parseFloat(item.volume||0).toFixed(3)}</td></tr>))}
+                        <tr className="font-bold bg-gray-50">
+                            <td colSpan="3" className="border border-black p-1 text-right">Total:</td>
+                            <td className="border border-black p-1 text-center">{printDN.items.reduce((a,b)=>a + (parseInt(b.qty||1,10)||0),0)}</td>
+                            <td className="border border-black p-1 text-right">{printDN.items.reduce((a,b)=>a+parseFloat(b.volume||0),0).toFixed(3)}</td>
+                        </tr></tbody></table>
+                        <div className="grid grid-cols-2 gap-8 text-[9px] font-bold mb-2"><div className="space-y-3"><div className="flex items-end"><span className="w-36 flex-shrink-0">Logistics Incharge:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">QC Signature:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">QC Name:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Transport Co:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Driver Name:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Vehicle No:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">mobile No:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Date:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Loading Time:</span> <div className="flex-1 border-b border-black border-dotted"></div></div></div><div className="space-y-3 flex flex-col"><div className="flex items-end"><span className="w-24 flex-shrink-0">Security Name:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Security Sign:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Receiver Name:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Receiver Sign:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Company Name:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex items-end"><span className="w-24 flex-shrink-0">Date:</span> <div className="flex-1 border-b border-black border-dotted"></div></div><div className="flex-1 flex items-end justify-end mt-4"><div className="text-center"><div className="text-[10px] font-bold uppercase text-blue-900">NARAN PRECAST CONCRETE CO.</div></div></div></div></div>
+                    </div>
+                    <div className="border-t border-black pt-1 text-center mt-auto"><h3 className="font-bold text-[10px] uppercase text-blue-900">NARAN PRECAST CONCRETE CO. <span className="font-normal normal-case ml-1 text-black">Part of Naran Group</span></h3><p className="text-[9px] text-gray-600">Tel: +971 67484753 | Fax: +971 67484759 | E-mail: naranpcc@naranpcc.ae</p></div>
+                </div>
+            );
+
+            return (
+                <div className="flex h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
+                    
+                    {/* mOBILE HEADER */}
+                    <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center fixed top-0 left-0 right-0 z-50 shadow-md">
+                        <h1 className="font-bold text-lg tracking-tight truncate mr-2">Naran Precast</h1>
+                        <button onClick={() => setIsmobilemenuOpen(!ismobilemenuOpen)} className="p-2 rounded hover:bg-slate-800"><Icon name="bars" size={24}/></button>
+                    </div>
+
+                    {ismobilemenuOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsmobilemenuOpen(false)}></div>}
+
+                    {/* SIDEBAR (Responsive) */}
+                    <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transition-transform duration-300 ease-in-out transform ${ismobilemenuOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 md:flex flex-col`}>
+                        <div className="p-6 border-b border-slate-800 flex items-center gap-3 mt-14 md:mt-0">
+                            <div className="bg-blue-600 p-2 rounded-lg text-white"><Icon name="hammer" size={20}/></div>
+                            <div>
+                                <h1 className="font-bold text-lg tracking-tight leading-tight">Naran Precast</h1>
+                                <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Concrete Company LLC.</p>
+                            </div>
+                        </div>
+                        <nav className="p-4 space-y-2 flex-1 overflow-y-auto">
+                            {(() => {
+                                    const base = [{id:'production', lbl:'Scheduler', icon:'calendar'}, {id:'control', lbl:'Production Control', icon:'hammer'}, {id:'delivery', lbl:'Delivery', icon:'truck'}, {id:'reports', lbl:'Reports', icon:'fileText'}, {id:'projects', lbl:'Projects', icon:'folderPlus'}, {id:'logs', lbl:'Activity Logs', icon:'shield'}];
+                                    // Only show users management for admins
+                                    if (userRole === 'admin') base.push({ id: 'users', lbl: 'User management', icon: 'shield' });
+                                    return base;
+                                })().map(item => (
+                                <button key={item.id} onClick={() => { setView(item.id); setIsmobilemenuOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${view === item.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}>
+                                    <Icon name={item.icon}/> <span className="font-medium">{item.lbl}</span>
+                                </button>
+                            ))}
+                        </nav>
+                        <div className="p-4 border-t border-slate-800">
+                            <div className="mb-3 text-xs text-slate-300">
+                                <div className="font-bold text-white truncate" title={user?.email}>{user?.email}</div>
+                                <div className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded-full bg-blue-700 text-white font-semibold">{userRole || 'loading...'}</div>
+                            </div>
+                            <button onClick={() => auth.signOut()} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-400 hover:bg-slate-800 transition"><Icon name="arrowRight" className="rotate-180"/> <span className="font-bold">Sign Out</span></button>
+                        </div>
+                    </aside>
+
+                    {/* mAIN CONTENT */}
+                    <main className="flex-1 bg-slate-50 p-4 md:p-8 overflow-y-auto relative mt-16 md:mt-0">
+                        {view === 'production' && <WeeklyPlanner elements={elements} projects={projects} onUpdate={(id,d,m)=>handleUpdate(id,d,m)} onImport={() => setIsImportOpen(true)} onPasteImport={() => setIsPasteImportOpen(true)} onAdd={() => setIsBatchAddOpen(true)} userRole={userRole} />}
+                        {view === 'control' && <ProductionControlView elements={elements} projects={projects} onUpdate={handleUpdate} onDelete={handleDelete} userRole={userRole} />}
+                        {view === 'delivery' && <DeliveryView elements={elements} projects={projects} onCreateDN={()=>{setDnItems([]); setDnProj(''); setDnmodal(true)}} onHistory={()=>setHistmodal(true)} userRole={userRole} />}
+                        {view === 'reports' && <ReportsView elements={elements} projects={projects} />}
+                        {view === 'logs' && <LogsView user={user} userRole={userRole} />}
+                        {view === 'users' && userRole === 'admin' && <UsersView userRole={userRole} />}
+                        {view === 'projects' && (
+                            <div className="space-y-6 fade-in">
+                                <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                    <h2 className="font-bold text-lg text-blue-700">Active Projects</h2>
+                                    <button onClick={() => setIsProjOpen(true)} disabled={!canEdit()} className="disabled:opacity-50 disabled:cursor-not-allowed bg-blue-600 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2"><Icon name="plus"/> Add Project</button>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {projects.map(p => {
+                                        const count = elements.filter(e => String(e.projectNumber) === String(p.projectId)).length;
+                                        return (
+                                            <div key={p.id} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition relative flex flex-col justify-between h-40">
+                                                <div className="flex justify-between items-start">
+                                                    <div><h3 className="font-bold text-lg text-slate-800 line-clamp-2">{p.name}</h3><p className="text-slate-500 text-sm mt-1">#{p.projectId}</p></div>
+                                                    <div className="flex gap-2">
+                                                        <button onClick={() => setSummaryProj(p)} className="bg-emerald-50 text-emerald-600 p-2 rounded-lg hover:bg-emerald-100 transition" title="View Summary"><Icon name="list" size={16}/></button>
+                                                        <button onClick={() => setEditingProj(p)} disabled={!canEdit()} className="disabled:opacity-50 disabled:cursor-not-allowed bg-blue-50 text-blue-600 p-2 rounded-lg hover:bg-blue-100 transition"><Icon name="pencil" size={16}/></button>
+                                                        <div className="bg-slate-100 text-slate-500 p-2 rounded-lg"><Icon name="building" size={20} /></div>
+                                                    </div>
+                                                </div>
+                                                {p.address && <p className="text-xs text-slate-400 mt-2 truncate"><Icon name="truck" size={10} className="mr-1"/>{p.address}</p>}
+                                                <div className="flex justify-between items-end mt-4">
+                                                    <span className="text-sm text-slate-600 font-medium">Total Elements: <span className="font-bold text-slate-900">{count}</span></span>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteProject(p.id); }} disabled={!isAdminUser()} className="disabled:opacity-50 disabled:cursor-not-allowed text-red-300 hover:text-red-500 transition"><Icon name="trash" size={16} /></button>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* --- mODAL SECTION --- */}
+                    
+                    {isImportOpen && <ImportWizard projects={projects} onClose={() => setIsImportOpen(false)} onImportComplete={(msg) => { setIsImportOpen(false); logActivity('ImPORT', msg || 'File Imported'); }} userRole={userRole} />}
+                    {isPasteImportOpen && <PasteImporter projects={projects} onClose={() => setIsPasteImportOpen(false)} onImportComplete={(msg) => { setIsPasteImportOpen(false); logActivity('ImPORT', msg || 'Pasted Data'); }} userRole={userRole} />}
+                    
+                    {/* NEW: BATCH ADD mODAL (Updated with Quantity) */}
+                    {isBatchAddOpen && (
+                        <div className="fixed inset-0 bg-black/60 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl flex flex-col h-[90vh] overflow-hidden">
+                                <div className="p-4 bg-slate-900 text-white flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><Icon name="plus"/> Batch Add Elements</h3><button onClick={() => setIsBatchAddOpen(false)}><Icon name="x"/></button></div>
+                                <div className="p-4 border-b bg-slate-50"><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Project for Batch</label><select value={batchProj} onChange={e=>setBatchProj(e.target.value)} className="w-full max-w-md p-2 border-2 border-blue-200 rounded font-bold text-slate-800 bg-white"><option value="">-- Select Project --</option>{projects.map(p => <option key={p.projectId} value={p.projectId}>{p.name} (#{p.projectId})</option>)}</select></div>
+                                <div className="flex-1 overflow-auto p-4">
+                                    <table className="w-full text-sm text-left border-collapse"><thead className="bg-slate-100 text-xs uppercase font-bold text-slate-500 sticky top-0"><tr><th className="p-3 border">Element ID (Base)</th><th className="p-3 border w-16 text-center bg-yellow-50">Qty</th><th className="p-3 border">Cluster</th><th className="p-3 border">Villa</th><th className="p-3 border">Type</th><th className="p-3 border w-20">L</th><th className="p-3 border w-20">W/H</th><th className="p-3 border w-20">Vol</th><th className="p-3 border text-center">Action</th></tr></thead>
+                                    <tbody>{addRows.map((row, idx) => (<tr key={idx}><td className="p-1 border"><input value={row.id} onChange={e=>handleRowChange(idx, 'id', e.target.value)} className="w-full p-2 border-none bg-transparent font-bold" placeholder="e.g. COL-01"/></td><td className="p-1 border bg-yellow-50"><input type="number" min="1" value={row.qty} onChange={e=>handleRowChange(idx, 'qty', e.target.value)} className="w-full p-2 border-none bg-transparent text-center font-bold text-blue-600"/></td><td className="p-1 border"><input value={row.cluster} onChange={e=>handleRowChange(idx, 'cluster', e.target.value)} className="w-full p-2 border-none bg-transparent"/></td><td className="p-1 border"><input value={row.villa} onChange={e=>handleRowChange(idx, 'villa', e.target.value)} className="w-full p-2 border-none bg-transparent"/></td><td className="p-1 border"><input value={row.type} onChange={e=>handleRowChange(idx, 'type', e.target.value)} className="w-full p-2 border-none bg-transparent"/></td><td className="p-1 border"><input value={row.len} onChange={e=>handleRowChange(idx, 'len', e.target.value)} className="w-full p-2 border-none bg-transparent"/></td><td className="p-1 border"><input value={row.wh} onChange={e=>handleRowChange(idx, 'wh', e.target.value)} className="w-full p-2 border-none bg-transparent"/></td><td className="p-1 border"><input value={row.vol} onChange={e=>handleRowChange(idx, 'vol', e.target.value)} className="w-full p-2 border-none bg-transparent"/></td><td className="p-1 border text-center"><button onClick={()=>handleRemoveRow(idx)} className="text-red-400 hover:text-red-600"><Icon name="trash"/></button></td></tr>))}</tbody></table>
+                                    <p className="text-xs text-slate-400 mt-2 italic">* If Qty &gt; 1, IDs will be generated as ID-1, ID-2, etc.</p>
+                                </div>
+                                <div className="p-4 border-t bg-slate-50 flex justify-between items-center"><button onClick={handleAddRow} className="text-blue-600 font-bold flex items-center gap-2 hover:underline"><Icon name="plus"/> Add Row</button><div className="flex gap-2"><button onClick={() => setIsBatchAddOpen(false)} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-200 rounded">Cancel</button><button onClick={handleBatchSave} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-bold shadow-lg">Save All Elements</button></div></div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* NEW: SUmmARY mODAL */}
+                    {summaryProj && (
+                        <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+                                <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+                                    <h3 className="font-bold text-lg">ProjectNo {summaryProj.projectId} - {summaryProj.name} Summary</h3>
+                                    <button onClick={() => setSummaryProj(null)}><Icon name="x"/></button>
+                                </div>
+                                <div className="flex-1 overflow-auto p-6">
+                                    {(() => {
+                                        const projElements = elements.filter(e => String(e.projectNumber) === String(summaryProj.projectId));
+                                        const types = [...new Set(projElements.map(e => (e.type || 'Unknown').toUpperCase()))].sort();
+                                        const data = { total: { TOTAL: 0 }, casted: { TOTAL: 0 }, delivered: { TOTAL: 0 }, balCast: { TOTAL: 0 }, balDel: { TOTAL: 0 } };
+                                        types.forEach(t => { data.total[t] = 0; data.casted[t] = 0; data.delivered[t] = 0; data.balCast[t] = 0; data.balDel[t] = 0; });
+                                        projElements.forEach(e => { const t = (e.type || 'Unknown').toUpperCase(); data.total[t]++; data.total.TOTAL++; if (e.castingDate) { data.casted[t]++; data.casted.TOTAL++; } if (e.deliveryDate) { data.delivered[t]++; data.delivered.TOTAL++; } });
+                                        types.forEach(t => { data.balCast[t] = data.total[t] - data.casted[t]; data.balDel[t] = data.casted[t] - data.delivered[t]; });
+                                        data.balCast.TOTAL = data.total.TOTAL - data.casted.TOTAL; data.balDel.TOTAL = data.casted.TOTAL - data.delivered.TOTAL;
+                                        return ( <table className="w-full text-sm border-collapse border border-slate-300 text-center"><thead><tr className="bg-[#005a8d] text-white font-bold"><th className="p-3 border border-slate-300 text-left w-48">DESCRIPTION</th>{types.map(t => <th key={t} className="p-3 border border-slate-300">{t}</th>)}<th className="p-3 border border-slate-300 bg-slate-800">TOTAL</th></tr></thead><tbody className="font-bold text-slate-700"><tr className="bg-blue-50"><td className="p-3 border border-slate-300 text-left">Total Elements</td>{types.map(t => <td key={t} className="p-3 border border-slate-300">{data.total[t]}</td>)}<td className="p-3 border border-slate-300 text-slate-900 text-lg">{data.total.TOTAL}</td></tr><tr className="bg-white"><td className="p-3 border border-slate-300 text-left">Casted</td>{types.map(t => <td key={t} className="p-3 border border-slate-300">{data.casted[t]}</td>)}<td className="p-3 border border-slate-300 text-slate-900 text-lg">{data.casted.TOTAL}</td></tr><tr className="bg-blue-50"><td className="p-3 border border-slate-300 text-left">Delivered</td>{types.map(t => <td key={t} className="p-3 border border-slate-300">{data.delivered[t]}</td>)}<td className="p-3 border border-slate-300 text-slate-900 text-lg">{data.delivered.TOTAL}</td></tr><tr className="bg-white"><td className="p-3 border border-slate-300 text-left">Balance Casting</td>{types.map(t => <td key={t} className="p-3 border border-slate-300 text-red-600">{data.balCast[t]}</td>)}<td className="p-3 border border-slate-300 text-red-600 text-lg">{data.balCast.TOTAL}</td></tr><tr className="bg-blue-50"><td className="p-3 border border-slate-300 text-left">Balance Delivery (Stock)</td>{types.map(t => <td key={t} className="p-3 border border-slate-300 text-emerald-600">{data.balDel[t]}</td>)}<td className="p-3 border border-slate-300 text-emerald-600 text-lg">{data.balDel.TOTAL}</td></tr></tbody></table> );
+                                    })()}
+                                </div>
+                                <div className="p-4 border-t bg-slate-50 flex justify-end"><button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-2 rounded font-bold flex items-center gap-2 hover:bg-slate-900 transition"><Icon name="print"/> Print Summary</button></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {dnmodal && (
+                        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-7xl p-4 flex flex-col h-[95vh] text-slate-900 transform scale-100 transition-all">
+                                <div className="flex justify-between items-center mb-2"><h3 className="font-bold text-lg flex items-center gap-2"><Icon name="truck" className="text-slate-700"/> Create Delivery Note</h3><button onClick={()=>{setDnmodal(false); setDnSearch('');}} className="p-1 hover:bg-slate-100 rounded-full transition"><Icon name="x"/></button></div>
+                                <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 mb-2 space-y-2">
+                                    <div className="flex gap-2 items-center">
+                                        <div className="relative flex-1"><Icon name="hashtag" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input type="text" value={dnSearch} onChange={e => setDnSearch(e.target.value)} className="w-full pl-9 p-1.5 border border-slate-300 rounded text-sm font-bold placeholder-slate-400 focus:border-blue-500 outline-none" placeholder="Search ID..." /></div>
+                                        <div className="relative flex-[2]"><Icon name="search" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input type="text" value={dnmetaSearch} onChange={e => setDnmetaSearch(e.target.value)} className="w-full pl-9 p-1.5 border border-slate-300 rounded text-sm font-bold placeholder-slate-400 focus:border-blue-500 outline-none" placeholder="Search Cluster, Villa, Type..." /></div>
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-2">
+                                        <div><label className="block text-[10px] font-bold text-slate-500 uppercase">Project</label><select value={dnProj} onChange={handleDnProjChange} className="w-full p-1.5 border border-slate-300 rounded text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"><option value="">-- Select --</option>{projects.map(p=><option key={p.id} value={p.projectId}>{p.name}</option>)}</select></div>
+                                        <div><label className="block text-[10px] font-bold text-slate-500 uppercase">Date</label><input type="date" value={dnDate} onChange={e=>setDnDate(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"/></div>
+                                        <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-500 uppercase">Address</label><input value={dnAddr} onChange={e=>setDnAddr(e.target.value)} className="w-full p-1.5 border border-slate-300 rounded text-sm font-bold text-slate-700 focus:border-blue-500 outline-none" placeholder="Enter Delivery Address..."/></div>
+                                    </div>
+                                </div>
+                                <div className="flex-1 border rounded-lg overflow-hidden flex flex-col bg-white">
+                                    <div className="bg-slate-100 p-2 border-b flex justify-between items-center shadow-sm z-10"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Available Stockyard Items</span><div className="flex gap-2"><button onClick={()=>setDnItems(elements.filter(e => String(e.projectNumber) === String(dnProj) && e.status === 'Stockyard' && (dnSearch ? String(e.elementId).toLowerCase().includes(dnSearch.toLowerCase()) : true) && (dnmetaSearch ? checkmetamatch(e, dnmetaSearch) : true)))} className="text-[10px] text-blue-600 font-bold hover:underline">Select All</button><button onClick={()=>setDnItems([])} className="text-[10px] text-red-400 font-bold hover:underline">Clear</button></div></div>
+                                    <div className="flex-1 overflow-y-auto p-3">
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                                            {elements.filter(e => { 
+                                                if (String(e.projectNumber) !== String(dnProj)) return false; 
+                                                if (e.status !== 'Stockyard') return false; 
+                                                if (dnSearch && !String(e.elementId).toLowerCase().includes(dnSearch.toLowerCase())) return false; 
+                                                if (dnmetaSearch && !checkmetamatch(e, dnmetaSearch)) return false; 
+                                                return true; 
+                                            }).map(el => {
+                                                const isSelected = dnItems.find(i=>i.id===el.id);
+                                                return (
+                                                    <div key={el.id} onClick={()=>toggleDnItem(el)} className={`p-2 border rounded cursor-pointer flex flex-col justify-between transition-all duration-100 ${isSelected ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white border-slate-200 text-slate-700 hover:border-blue-400'}`}>
+                                                        <div className="flex justify-between items-start mb-1">
+                                                            <span className="font-bold text-xs truncate mr-1">{el.elementId}</span>
+                                                            {isSelected && <Icon name="check" size={10} className="text-white flex-shrink-0"/>}
+                                                        </div>
+                                                        <div className="flex justify-between items-end text-[10px] opacity-90">
+                                                            <span className="truncate max-w-[60px]">{el.type}</span>
+                                                            <span className="font-mono">{parseFloat(el.volume||0).toFixed(2)}</span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        {dnProj && elements.filter(e => String(e.projectNumber) === String(dnProj) && e.status === 'Stockyard').length === 0 && (<div className="flex flex-col items-center justify-center h-full text-slate-400 opacity-50 pb-10"><Icon name="box" size={32} className="mb-2"/><p className="text-sm font-bold">No items found.</p></div>)}
+                                    </div>
+                                </div>
+                                <div className="mt-2 pt-2 border-t flex justify-between items-center bg-white"><div className="text-xs"><span className="text-slate-500">Selected: </span><span className="font-bold text-slate-900 text-lg ml-1">{dnItems.length}</span><span className="text-slate-300 mx-3">|</span><span className="text-slate-500">Vol: </span><span className="font-bold text-slate-900 text-lg ml-1">{dnItems.reduce((a,b)=>a+parseFloat(b.volume||0),0).toFixed(3)}</span><span className="text-slate-400 text-[10px] ml-1">m³</span></div><button onClick={handleCreateDN} disabled={dnItems.length===0} className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-2 rounded-lg font-bold disabled:opacity-50 disabled:cursor-not-allowed transition shadow flex gap-2 items-center text-sm"><Icon name="fileText"/> Generate Note</button></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {histmodal && (<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl p-6 h-[80vh] text-slate-900 flex flex-col"><div className="flex justify-between mb-4"><h3 className="font-bold text-xl">Delivery History</h3><button onClick={()=>{setHistmodal(false); setHistSearch('');}}><Icon name="x"/></button></div><div className="mb-4 relative"><Icon name="search" className="absolute left-3 top-2.5 text-slate-400" size={14}/><input type="text" placeholder="Search by Element ID or DN Number..." value={histSearch} onChange={e => setHistSearch(e.target.value)} className="w-full pl-9 p-2 border rounded text-sm bg-slate-50 focus:bg-white focus:border-blue-500 outline-none transition"/></div><div className="flex-1 overflow-auto border rounded-lg"><table className="w-full text-xs text-left"><thead className="bg-slate-100 sticky top-0 shadow-sm"><tr><th className="p-3">DN #</th><th className="p-3">Date</th><th className="p-3">Project</th><th className="p-3 text-center">Items</th><th className="p-3 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{notes.filter(n => { const s = (histSearch || '').toLowerCase().trim(); if (!s) return true; const dnmatch = (n.dnNumber || '').toLowerCase().includes(s); const itemmatch = (n.items || []).some(i => String(i.elementId || '').toLowerCase().includes(s)); return dnmatch || itemmatch; }).map(n => (<tr key={n.id} className="hover:bg-blue-50 transition"><td className="p-3 font-mono font-bold text-slate-700">{n.dnNumber}{histSearch && n.items.some(i => i.elementId.toLowerCase().includes(histSearch.toLowerCase())) && (<span className="block text-[9px] text-emerald-600 font-normal mt-1">Contains "{histSearch}"</span>)}</td><td className="p-3">{formatDate(n.date)}</td><td className="p-3">{n.project}</td><td className="p-3 text-center font-bold">{n.items.length}</td><td className="p-3 text-center flex justify-center gap-3"><button onClick={()=>{setPrintDN(n); setHistmodal(false)}} className="text-blue-600 hover:text-blue-800" title="View Note"><Icon name="fileText"/> View</button><button onClick={() => handleDeleteNote(n.id)} className="text-red-400 hover:text-red-600" title="Delete Record"><Icon name="trash"/></button></td></tr>))}</tbody></table></div></div></div>)}
+                    
+                    {/* ADD ELEmENT mODAL */}
+                    {isAddOpen && (<div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full"><h3 className="font-bold text-lg text-slate-800 mb-4">New Element</h3><form onSubmit={handleAddElem} className="space-y-4"><select name="proj" className="w-full p-3 border rounded bg-white text-slate-900 font-bold outline-none focus:border-blue-500" required><option value="">Select Project</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><input name="id" placeholder="Element ID" className="w-full p-3 border rounded bg-white text-slate-900" required /><input name="type" placeholder="Type" className="w-full p-3 border rounded bg-white text-slate-900" /><div className="grid grid-cols-3 gap-2"><input name="len" placeholder="Length" className="w-full p-3 border rounded bg-white text-slate-900 text-sm"/><input name="wh" placeholder="Width" className="w-full p-3 border rounded bg-white text-slate-900 text-sm"/><input name="vol" placeholder="Vol (m³)" className="w-full p-3 border rounded bg-white text-slate-900 text-sm font-bold"/></div><div className="flex justify-end gap-2"><button type="button" onClick={() => setIsAddOpen(false)} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded">Cancel</button><button type="submit" className="bg-blue-600 text-white px-6 py-2 rounded font-bold hover:bg-blue-700">Add</button></div></form></div></div>)}
+                    
+                    {/* ADD PROJECT mODAL */}
+                    {isProjOpen && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full transform scale-100 transition-all"><h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-2"><Icon name="folderPlus" className="text-blue-600"/> New Project</h3><form onSubmit={handleAddProj} className="space-y-4"><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project ID / Number</label><input name="id" placeholder="e.g. 2023-001" className="w-full p-3 border-2 border-slate-200 rounded-lg bg-white text-slate-900 font-bold placeholder-slate-400 focus:border-blue-500 outline-none transition" required autoComplete="off"/></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project Name</label><input name="name" placeholder="e.g. Skyline Towers" className="w-full p-3 border-2 border-slate-200 rounded-lg bg-white text-slate-900 font-bold placeholder-slate-400 focus:border-blue-500 outline-none transition" required autoComplete="off"/></div><div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Shipping Address</label><input name="address" placeholder="e.g. Plot 45, Dubai Industrial City" className="w-full p-3 border-2 border-slate-200 rounded-lg bg-white text-slate-900 font-bold placeholder-slate-400 focus:border-blue-500 outline-none transition"/></div><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setIsProjOpen(false)} className="px-5 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg transition">Cancel</button><button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition">Create Project</button></div></form></div></div>)}
+
+                    {editingProj && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full transform scale-100 transition-all">
+                                <h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-2"><Icon name="pencil" className="text-blue-600"/> Edit Project</h3>
+                                <form onSubmit={handleUpdateProject} className="space-y-4">
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project ID (Read Only)</label><input value={editingProj.projectId} readOnly className="w-full p-3 border rounded bg-slate-100 text-slate-500 font-bold cursor-not-allowed"/></div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Project Name</label><input name="name" defaultValue={editingProj.name} className="w-full p-3 border-2 border-slate-200 rounded-lg bg-white text-slate-900 font-bold placeholder-slate-400 focus:border-blue-500 outline-none transition"/></div>
+                                    <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Shipping Address</label><input name="address" defaultValue={editingProj.address} className="w-full p-3 border-2 border-slate-200 rounded-lg bg-white text-slate-900 font-bold placeholder-slate-400 focus:border-blue-500 outline-none transition"/></div>
+                                    <div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setEditingProj(null)} className="px-5 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg transition">Cancel</button><button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition">Save Changes</button></div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOm.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+

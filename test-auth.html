@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Firebase Auth & Rules Test</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e293b; color: #e2e8f0; }
+        .success { color: #10b981; }
+        .error { color: #ef4444; }
+        .info { color: #3b82f6; }
+        button { background: #3b82f6; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: #2563eb; }
+        pre { background: #0f172a; padding: 15px; border-radius: 5px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Firebase Diagnostic Tool</h1>
+    <div id="output"></div>
+    
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyALsmpILIY160Nvumb-ybXv6d4fpITxrDY",
+            authDomain: "system-analysis-automation.firebaseapp.com",
+            projectId: "system-analysis-automation",
+            storageBucket: "system-analysis-automation.firebasestorage.app",
+            messagingSenderId: "756054830614",
+            appId: "1:756054830614:web:5e4c09b20f8b49b2db8f37"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const output = document.getElementById('output');
+
+        function log(msg, type = 'info') {
+            const div = document.createElement('div');
+            div.className = type;
+            div.innerHTML = msg;
+            output.appendChild(div);
+        }
+
+        async function runTests() {
+            output.innerHTML = '';
+            log('<h2>Running Diagnostics...</h2>');
+            
+            // 1. Check project
+            log(`<h3>1. Project Configuration</h3>`);
+            log(`✓ Project ID: <strong>${firebase.app().options.projectId}</strong>`, 'success');
+            log(`✓ Auth Domain: ${firebase.app().options.authDomain}`, 'info');
+            
+            // 2. Check auth
+            log(`<h3>2. Authentication Status</h3>`);
+            const user = auth.currentUser;
+            if (user) {
+                log(`✓ Signed in as: <strong>${user.email}</strong>`, 'success');
+                log(`✓ User ID: ${user.uid}`, 'info');
+            } else {
+                log(`✗ NOT SIGNED IN - Firestore reads will fail!`, 'error');
+                log(`<button onclick="auth.signInWithEmailAndPassword(prompt('Email:'), prompt('Password:'))">Sign In Now</button>`);
+                return;
+            }
+            
+            // 3. Check user profile
+            log(`<h3>3. User Profile Document</h3>`);
+            try {
+                const userDoc = await db.collection('users').doc(user.uid).get();
+                if (userDoc.exists) {
+                    const data = userDoc.data();
+                    log(`✓ Profile found:`, 'success');
+                    log(`<pre>${JSON.stringify(data, null, 2)}</pre>`);
+                    if (data.disabled) {
+                        log(`⚠️ WARNING: Account is DISABLED`, 'error');
+                    }
+                    if (!data.role) {
+                        log(`⚠️ WARNING: No role assigned`, 'error');
+                    }
+                } else {
+                    log(`✗ User profile document NOT FOUND in users/${user.uid}`, 'error');
+                    log(`<button onclick="createProfile()">Create Profile Document</button>`);
+                }
+            } catch (e) {
+                log(`✗ Error reading profile: ${e.message}`, 'error');
+            }
+            
+            // 4. Test reads
+            log(`<h3>4. Testing Firestore Read Permissions</h3>`);
+            
+            try {
+                log(`Testing projects collection...`);
+                const projects = await db.collection('projects').limit(1).get();
+                log(`✓ Projects readable! (${projects.size} docs fetched)`, 'success');
+            } catch (e) {
+                log(`✗ Projects read FAILED: ${e.message}`, 'error');
+            }
+            
+            try {
+                log(`Testing elements collection...`);
+                const elements = await db.collection('elements').limit(1).get();
+                log(`✓ Elements readable! (${elements.size} docs fetched)`, 'success');
+            } catch (e) {
+                log(`✗ Elements read FAILED: ${e.message}`, 'error');
+            }
+            
+            try {
+                log(`Testing delivery_notes collection...`);
+                const notes = await db.collection('delivery_notes').limit(1).get();
+                log(`✓ Delivery notes readable! (${notes.size} docs fetched)`, 'success');
+            } catch (e) {
+                log(`✗ Delivery notes read FAILED: ${e.message}`, 'error');
+            }
+            
+            log(`<h3>✅ Diagnostic Complete</h3>`);
+        }
+
+        async function createProfile() {
+            const user = auth.currentUser;
+            if (!user) {
+                alert('Please sign in first!');
+                return;
+            }
+            
+            try {
+                await db.collection('users').doc(user.uid).set({
+                    email: user.email,
+                    name: user.displayName || user.email,
+                    role: 'admin',
+                    disabled: false,
+                    createdAt: new Date().toISOString()
+                });
+                log(`✓ Profile created successfully!`, 'success');
+                setTimeout(runTests, 1000);
+            } catch (e) {
+                log(`✗ Failed to create profile: ${e.message}`, 'error');
+            }
+        }
+
+        // Auto-run on auth state change
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                runTests();
+            } else {
+                output.innerHTML = '<h2>⚠️ Please Sign In First</h2>';
+                output.innerHTML += '<button onclick="auth.signInWithEmailAndPassword(prompt(\'Email:\'), prompt(\'Password:\')).then(() => location.reload())">Sign In</button>';
+            }
+        });
+    </script>
+</body>
+</html>

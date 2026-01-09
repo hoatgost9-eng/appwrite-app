@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Simple working rules - no complex role checks that can fail
+    
+    // Users collection - allow reading own profile without any checks
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+    
+    // All other collections - simple authenticated check only
+    match /projects/{projectId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /elements/{elementId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /delivery_notes/{noteId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /recycle/{recycleId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /logs/{logId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /invitations/{inviteId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
