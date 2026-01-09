@@ -829,13 +829,17 @@
                     console.error(err); 
                     let msg = err.message || (isRegistering ? "Registration failed." : "Login failed.");
                     if (msg === "Failed to fetch") {
-                        msg = "Connection Error: You must run this app on a Local Server (not file://) and add 'localhost:8000' to Appwrite Platforms.";
+                        msg = `Connection Error: Access blocked. Please add '${window.location.hostname}' to Appwrite Platforms (no https://).`;
                     }
                     if (err.type === 'user_invalid_credentials') {
                         msg = "Invalid email or password. Please try again.";
                     }
                     if (err.type === 'user_already_exists') {
                         msg = "An account with this email already exists. Please login instead.";
+                    }
+                    // Show technical details if available
+                    if (err.code || err.type) {
+                        msg += ` (Debug: ${err.code || 'N/A'} - ${err.type || 'N/A'})`;
                     }
                     setError(msg); 
                     sessionStorage.removeItem('kesha_session_active');
@@ -3506,6 +3510,7 @@
             const [logTab, setLogTab] = useState('activity');
             const [backupFreq, setBackupFreq] = useState(localStorage.getItem('kesha_backup_freq') || 'off');
             const [lastBackup, setLastBackup] = useState(localStorage.getItem('kesha_last_backup'));
+            const [restoreMode, setRestoreMode] = useState('merge'); // 'merge' or 'overwrite'
             const restoreFileRef = useRef(null);
 
             useEffect(() => {
@@ -3585,7 +3590,18 @@
                 const file = e.target.files[0];
                 if (!file) return;
                 
-                if (!confirm("⚠️ CRITICAL WARNING: RESTORE / MIGRATE\n\nThis will OVERWRITE data in the current database with data from the backup file.\n\nIf you are migrating to a new empty database, this is safe.\nIf you are on your live database, this replaces current data.\n\nAre you sure you want to proceed?")) {
+                // Use the selected restore mode from state
+                const isMergeMode = restoreMode === 'merge';
+                
+                const modeText = isMergeMode ? '🔀 MERGE MODE' : '⚠️ OVERWRITE MODE';
+                const modeDesc = isMergeMode ? 
+                    'This will ADD new records from the backup file without overwriting existing data.' :
+                    'This will OVERWRITE all data in the current database with data from the backup file.';
+                const modeSafety = isMergeMode ? 
+                    'Existing records will be skipped. Safe for incremental restores.' :
+                    'If you are migrating to a new empty database, this is safe.\nIf you are on your live database, this replaces current data.';
+                
+                if (!confirm(`⚠️ CRITICAL WARNING: ${modeText}\n\n${modeDesc}\n\n${modeSafety}\n\nAre you sure you want to proceed?`)) {
                     e.target.value = null;
                     return;
                 }
@@ -3639,6 +3655,7 @@
                         
                         let processedDocs = 0;
                         let errors = 0;
+                        let skipped = 0;
                         let errorDetails = [];
                         
                         const BATCH_SIZE = 80; // Increased to 80 for faster restore
@@ -3680,6 +3697,19 @@
                                         if (!docId) {
                                             console.warn('Skipping document without ID in collection:', col);
                                             return { success: false, reason: 'No ID' };
+                                        }
+                                        
+                                        // **MERGE MODE: Check if record already exists**
+                                        if (isMergeMode) {
+                                            try {
+                                                const existing = await db.collection(col).doc(docId).get();
+                                                if (existing.exists) {
+                                                    console.log(`[MERGE] Skipping existing: ${col}/${docId}`);
+                                                    return { success: true, skipped: true };
+                                                }
+                                            } catch (e) {
+                                                // Continue if check fails
+                                            }
                                         }
                                         
                                         // Convert volume to number if present
@@ -3736,7 +3766,9 @@
                                 // Count successes and errors
                                 results.forEach(result => {
                                     processedDocs++;
-                                    if (!result.success) {
+                                    if (result.skipped) {
+                                        skipped++;
+                                    } else if (!result.success) {
                                         errors++;
                                     }
                                 });
@@ -3763,11 +3795,12 @@
                         progressBar.style.width = '100%';
                         progressBar.textContent = '100%';
                         progressText.textContent = '✅ Restore Complete!';
-                        progressDetails.textContent = `Successfully restored ${(processedDocs - errors).toLocaleString()} documents${errors > 0 ? ` (${errors} errors)` : ''}`;
+                        progressDetails.textContent = `Successfully restored ${(processedDocs - errors - skipped).toLocaleString()} documents${skipped > 0 ? ` • Skipped ${skipped} existing` : ''}${errors > 0 ? ` • ${errors} errors` : ''}`;
                         
                         setTimeout(() => {
                             document.body.removeChild(overlay);
-                            alert(`✅ Restore Complete!\n\nSuccessfully restored ${processedDocs - errors} records across ${collections.length} collections.\n${errors > 0 ? `\n⚠️ ${errors} documents failed to restore (check console for details)` : ''}\n\nNote: User passwords are not backed up. Users may need to register again, but their roles/profiles are restored.`);
+                            const mode = isMergeMode ? '🔀 MERGE MODE' : '⚠️ OVERWRITE MODE';
+                            alert(`✅ Restore Complete! (${mode})\n\nAdded: ${processedDocs - errors - skipped} records\n${skipped > 0 ? `Skipped (existing): ${skipped} records\n` : ''}${errors > 0 ? `\n⚠️ Errors: ${errors} documents (check console)` : ''}\n\nNote: User passwords are not backed up. Users may need to register again, but their roles/profiles are restored.`);
                             window.location.reload();
                         }, 2000);
                         
@@ -3845,7 +3878,26 @@
                                         <div className="bg-amber-100 p-3 rounded-full text-amber-600"><Icon name="history" size={24}/></div>
                                         <div className="flex-1">
                                             <h4 className="font-bold text-lg text-slate-800 mb-1">2. Import Data (Restore/Migrate)</h4>
-                                            <p className="text-sm text-slate-600 mb-4">Upload a backup file to restore data or populate a new database.</p>
+                                            <p className="text-sm text-slate-600 mb-3">Upload a backup file to restore data or populate a new database.</p>
+                                            <div className="bg-white border border-amber-200 rounded-lg p-4 mb-4">
+                                                <div className="text-xs font-bold text-slate-700 mb-3">✨ Choose Restore Mode:</div>
+                                                <div className="space-y-2">
+                                                    <button onClick={() => setRestoreMode('merge')} className={`w-full text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${restoreMode === 'merge' ? 'border-green-500 bg-green-50' : 'border-slate-200 bg-white hover:border-green-300'}`}>
+                                                        <input type="radio" checked={restoreMode === 'merge'} onChange={() => setRestoreMode('merge')} className="mt-0.5 cursor-pointer"/>
+                                                        <div className="flex-1">
+                                                            <div className="font-bold text-slate-800 text-sm">🔀 Merge Mode</div>
+                                                            <div className="text-xs text-slate-600">Add new records only • Skip existing • Safe for weekly restores</div>
+                                                        </div>
+                                                    </button>
+                                                    <button onClick={() => setRestoreMode('overwrite')} className={`w-full text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${restoreMode === 'overwrite' ? 'border-red-500 bg-red-50' : 'border-slate-200 bg-white hover:border-red-300'}`}>
+                                                        <input type="radio" checked={restoreMode === 'overwrite'} onChange={() => setRestoreMode('overwrite')} className="mt-0.5 cursor-pointer"/>
+                                                        <div className="flex-1">
+                                                            <div className="font-bold text-slate-800 text-sm">⚠️ Overwrite Mode</div>
+                                                            <div className="text-xs text-slate-600">Replace all data • Use only for fresh migrations</div>
+                                                        </div>
+                                                    </button>
+                                                </div>
+                                            </div>
                                             <input type="file" ref={restoreFileRef} onChange={handleRestoreSelect} accept=".json" className="hidden" />
                                             <button onClick={() => restoreFileRef.current.click()} className="bg-amber-600 text-white px-4 py-2 rounded font-bold hover:bg-amber-700 flex items-center gap-2 shadow-lg"><Icon name="upload"/> Select Backup File to Restore</button>
                                         </div>
@@ -5469,6 +5521,14 @@ service cloud.firestore {
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<ErrorBoundary><App /></ErrorBoundary>);
     </script>
+</body>
+</html>
+</body>
+</html>
+</html>
+</body>
+</html>
+</html>
 </body>
 </html>
 </body>
